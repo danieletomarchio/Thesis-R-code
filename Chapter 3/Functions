@@ -1,0 +1,278 @@
+#### Function Mixture ####
+
+Mixture <- function(X, gen, family, K) {
+  if (gen == "GU" | gen == "LO" | gen == "NO" | gen == "RG" | gen == "BE") {
+    npar <- 2
+  }
+  if (gen == "exGAUS" | gen == "SN1" | gen == "TF") {
+    npar <- 3
+  }
+  if (gen == "EGB2" | gen == "JSU" | gen == "SHASHo" | gen == "ST1" | gen == "GB1") {
+    npar <- 4
+  }
+
+  mu <- NULL
+  sigma <- NULL
+  nu <- NULL
+  tau <- NULL
+
+  # Mixture
+
+  temp <- gamlssMX(formula = X ~ 1, family = family, K = K, data = as.data.frame(X), control = MX.control(cc = 1e-03, trace = TRUE), g.control = gamlss.control(c.crit = 0.01, n.cyc = 10))
+
+  if (npar == 2) {
+    for (i in 1:K) {
+      mu[i] <- temp[["models"]][[i]][["mu.coefficients"]][["(Intercept)"]]
+      sigma[i] <- temp[["models"]][[i]][["sigma.coefficients"]][["(Intercept)"]]
+    }
+
+    coefficienti <- t(data.frame("mu" = mu, "sigma" = sigma, row.names = c(1:K)))
+  }
+
+  if (npar == 3) {
+    for (i in 1:K) {
+      mu[i] <- temp[["models"]][[i]][["mu.coefficients"]][["(Intercept)"]]
+      sigma[i] <- temp[["models"]][[i]][["sigma.coefficients"]][["(Intercept)"]]
+      nu[i] <- temp[["models"]][[i]][["nu.coefficients"]][["(Intercept)"]]
+    }
+
+    coefficienti <- t(data.frame("mu" = mu, "sigma" = sigma, "nu" = nu, row.names = c(1:K)))
+  }
+
+  if (npar == 4) {
+    for (i in 1:K) {
+      mu[i] <- temp[["models"]][[i]][["mu.coefficients"]][["(Intercept)"]]
+      sigma[i] <- temp[["models"]][[i]][["sigma.coefficients"]][["(Intercept)"]]
+      nu[i] <- temp[["models"]][[i]][["nu.coefficients"]][["(Intercept)"]]
+      tau[i] <- temp[["models"]][[i]][["tau.coefficients"]][["(Intercept)"]]
+    }
+
+    coefficienti <- t(data.frame("mu" = mu, "sigma" = sigma, "nu" = nu, "tau" = tau, row.names = c(1:K)))
+  }
+
+
+  if (gen == "BE" | gen == "GB1") {
+    coefficienti[1, ] <- exp(coefficienti[1, ]) / (1 + exp(coefficienti[1, ]))
+  }
+
+  if (gen == "BE" | gen == "GB1") {
+    coefficienti[2, ] <- exp(coefficienti[2, ]) / (1 + exp(coefficienti[2, ]))
+  } else {
+    coefficienti[2, ] <- exp(coefficienti[2, ])
+  }
+
+  if (gen == "exGAUS" | gen == "TF" | gen == "EGB2" | gen == "GB1") {
+    coefficienti[3, ] <- exp(coefficienti[3, ])
+  }
+
+  if (gen == "EGB2" | gen == "JSU" | gen == "SHASHo" | gen == "ST1" | gen == "GB1") {
+    coefficienti[4, ] <- exp(coefficienti[4, ])
+  }
+
+  pesi <- temp[["prob"]]
+  NLL2 <- temp[["G.deviance"]]
+  AIC <- temp[["aic"]]
+  BIC <- temp[["sbc"]]
+
+  return(
+    list(
+      coefficienti = coefficienti,
+      pesi = pesi,
+      NLL2 = NLL2,
+      AIC = AIC,
+      BIC = BIC
+    )
+  )
+}
+
+# Arguments:
+# - "X" is the dataset;
+# - "gen" and "family" follow the same notation of the gamlssMX() function. See the package help file for further details.
+# - "K" is the number of mixture components.
+
+# The output of the function provide the coefficients estimates, -2*loglikelihood, the AIC and the BIC for the (0,1) interval.
+
+#### Functions randlogit, rBeta and rGIB1 ####
+
+randlogit <- function(num, pi0, pi1, gen, kcomp, pesi, mu = NULL, sigma = NULL, nu = NULL, tau = NULL) {
+  zero <- rep(0, num * pi0)
+  uno <- rep(1, num * pi1)
+  bound <- c(zero, uno)
+  cont <- num - length(bound)
+
+  components <- sample(1:kcomp, size = cont, replace = TRUE, prob = pesi)
+
+  ### 2 Parameter distributions ###
+
+  if (gen == "GU") {
+    samples <- rlogitGU(n = cont, mu = mu[components], sigma = sigma[components])
+  }
+  if (gen == "LO") {
+    samples <- rlogitLO(n = cont, mu = mu[components], sigma = sigma[components])
+  }
+  if (gen == "NO") {
+    samples <- rlogitNO(n = cont, mu = mu[components], sigma = sigma[components])
+  }
+  if (gen == "RG") {
+    samples <- rlogitRG(n = cont, mu = mu[components], sigma = sigma[components])
+  }
+
+  ### 3 Parameter distributions ###
+
+  if (gen == "exGAUS") {
+    samples <- rlogitexGAUS(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components])
+  }
+  if (gen == "TF") {
+    samples <- rlogitTF(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components])
+  }
+  if (gen == "SN1") {
+    samples <- rlogitSN1(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components])
+  }
+
+  ### 4 Parameter distributions ###
+
+  if (gen == "EGB2") {
+    samples <- rlogitEGB2(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components], tau = tau[components])
+  }
+  if (gen == "JSU") {
+    samples <- rlogitJSU(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components], tau = tau[components])
+  }
+  if (gen == "SHASHo") {
+    samples <- rlogitSHASHo(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components], tau = tau[components])
+  }
+  if (gen == "ST1") {
+    samples <- rlogitST1(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components], tau = tau[components])
+  }
+
+  to <- c(samples, bound)
+  total <- sample(to, size = length(to))
+
+  return(total = total)
+}
+
+rBeta <- function(num, pi0, pi1, kcomp, pesi, mu = NULL, sigma = NULL) {
+  zero <- rep(0, num * pi0)
+  uno <- rep(1, num * pi1)
+  bound <- c(zero, uno)
+  cont <- num - length(bound)
+
+  components <- sample(1:kcomp, size = cont, replace = TRUE, prob = pesi)
+
+  samples <- rBE(n = cont, mu = mu[components], sigma = sigma[components])
+
+  to <- c(samples, bound)
+  total <- sample(to, size = length(to))
+
+  return(total = total)
+}
+
+rGIB1 <- function(num, pi0, pi1, kcomp, pesi, mu = NULL, sigma = NULL, nu = NULL, tau = NULL) {
+  zero <- rep(0, num * pi0)
+  uno <- rep(1, num * pi1)
+  bound <- c(zero, uno)
+  cont <- num - length(bound)
+
+  components <- sample(1:kcomp, size = cont, replace = TRUE, prob = pesi)
+
+  samples <- rGB1(n = cont, mu = mu[components], sigma = sigma[components], nu = nu[components], tau = tau[components])
+
+  to <- c(samples, bound)
+  total <- sample(to, size = length(to))
+
+  return(total = total)
+}
+
+# Arguments:
+# - "num" is the number of observations;
+# - "pi0" and "pi1" are the proportions of 0 and 1;
+# - "gen" has the same meaning as in the Mixture function;
+# - "kcomp" is the number of mixture components;
+# - "pesi" is the vector of mixture weights;
+# - "mu", "sigma", "nu and "tau" are the specific distribution parameters.
+
+#### rkGauss function ####
+
+rkGauss <- function(n, density, db) {
+  width <- density$bw # Kernel width
+  rkernel <- function(n) rnorm(n, sd = width) # Kernel sampler
+  sample(x = db, n, replace = TRUE) + rkernel(n) # Entire algorithm
+}
+
+# Arguments:
+# - "n" is the number of observations;
+# - "density" is a density object containing the estimated Gaussian kernel;
+# - "db" is the dataset;
+
+
+#### dbetak, betakernel, LCV and CZ functions ####
+
+dbetak <- function(x, moda, b, log = FALSE) {
+  return(
+    dbeta(x, shape1 = moda / b + 1, shape2 = (1 - moda) / b + 1, ncp = 0, log = log)
+  )
+}
+
+betakernel <- function(x, data, b) {
+  n <- length(data)
+  temp <- rowMeans(matrix(sapply(data, function(d) dbetak(x = x, moda = d, b = b, log = FALSE)), ncol = n))
+
+  return(temp)
+}
+
+# Arguments:
+# - "x" is evaluation point;
+# - "data" is the dataset;
+# - "b" is the smoothing parameter.
+
+LCV <- function(data, ntrain = NULL) {
+  n <- length(data)
+  if (is.null(ntrain)) {
+    ntrain <- n
+  }
+  if (ntrain < n) {
+    ind <- sample.int(n = n, size = ntrain, replace = FALSE, prob = NULL)
+    data <- data[ind]
+  }
+
+  f <- function(par, dat = data) {
+    b <- exp(par)
+
+    n <- length(dat)
+    cv <- 0
+    for (i in 1:n) {
+      cv <- cv + 1 / n * log(betakernel(x = dat[i], data = dat[-i], b = b))
+    }
+    return(-cv)
+  }
+
+  iniz <- log(bw.nrd0(data))
+  st <- nlm(f, iniz)$estimate
+  b <- exp(st)
+
+  return(b)
+}
+
+# Arguments:
+# - "data" is the dataset;
+# - "ntrain" is number of observations to be used.
+
+CZ <- function(num, pi0, pi1, gridx, gridy) {
+  zero <- rep(0, num * pi0)
+  uno <- rep(1, num * pi1)
+  bound <- c(zero, uno)
+  cont <- num - length(bound)
+
+  kern.samp <- sample(gridx, cont, replace = TRUE, prob = gridy)
+
+  to <- c(kern.samp, bound)
+  total <- sample(to, size = length(to))
+
+  return(list(total = total, gridy = gridy, gridx = gridx))
+}
+
+# Arguments:
+# - "num" is the number of observations;
+# - "pi0" and "pi1" are the proportions of 0 and 1;
+# - "gridx" is a vector containing the points at which evaluate the density;
+# - "gridy" is a vector containing the densities computed at the corresponding gridx value.
+
