@@ -1,0 +1,107 @@
+library(tcltk)
+library(gamlss.mx)
+library(openxlsx)
+library(bde)
+library(kimisc)
+library(devtools)
+
+# This version of the kdensity package, the only one that existed when I was working on this Chapter, is required.
+install_version("kdensity", version = "1.0.0", repos = "http://cran.us.r-project.org")
+library(kdensity)
+
+data <- (read.xlsx("Dataset A.xlsx")) # insert the directory of the file
+
+LGD2 <- as.numeric(data$LGD) # Dataset on [0,1]
+liminf <- LGD2[LGD2 == min(LGD2)]
+limsup <- LGD2[LGD2 == max(LGD2)]
+extreme <- c(liminf, limsup)
+core2 <- LGD2[!LGD2 %in% extreme] # Dataset on (0,1)
+
+#### Zero-One inflated Mixture model ####
+
+# This is an example for generating and fitting a model.
+# Change it with the desired distribution.
+
+gen.Family("LO", type = "logit") # Generate the logit version of the Logistic Distribution
+
+A.LGD <- Mixture(core2, gen = "LO", family = "logitLO", K = 3) # fits the mixture model
+
+pizero <- length(liminf) / length(LGD2) # proportion of 0
+pione <- length(limsup) / length(LGD2) # proportion of 1
+fixed <- length(LGD2) * pizero * log(pizero) + length(LGD2) * (1 - pizero - pione) * log(1 - pizero - pione) + length(LGD2) * pione * log(pione)
+Acomp.LGD.NLL2 <- (fixed + A.LGD$NLL2 / -2) * -2 # loglikelihood on the [0,1] interval
+Acomp.LGD.AIC <- Acomp.LGD.NLL2[1] + 2 * ((length(A.LGD$coefficienti) + length(A.LGD$pesi) - 1) + 2) # AIC on the [0,1] interval
+Acomp.LGD.BIC <- Acomp.LGD.NLL2[1] + log(length(LGD2)) * ((length(A.LGD$coefficienti) + length(A.LGD$pesi) - 1) + 2) # BIC on the [0,1] interval
+
+
+#### Simulation study ####
+
+N <- 50000 # number of obligors
+PD <- rep(0.05, N) # probability of default
+EAD <- rep(1, N) # exposure at default
+ID <- seq(from = 1, to = N, by = 1) # ID of the obligor
+rho <- 0.10 # pairwise correlation
+boot <- 10000 # number of iterations
+res <- numeric()
+
+KGS <- stats::density(LGD2, kernel = "gaussian", from = 0, to = 1) # GK model
+
+bw <- sd(LGD2) * length(LGD2)^(-2 / 5) # bandwidth for C-BK and H-BK models
+gridx <- seq(0, 1, len = 512)
+Chen <- chen99Kernel(dataPoints = LGD2, b = bw, dataPointsCache = gridx) # C-BK model
+
+SP <- kdensity(LGD2, bw = bw, kernel = "beta", start = "beta") # H-BK model
+gridxSP <- seq(0.0001, 0.99999, len = 512)
+gridySP <- sapply(gridxSP, function(x) SP(x))
+
+b.opt <- LCV(core2, ntrain = 1674) # bandwidth for the CZ-BK model
+gridxCZ <- seq(min(core2), max(core2), len = 512)
+gridyCZ <- betakernel(x = gridxCZ, data = core2, b = b.opt)
+
+
+# Run one of the following functions to insert in the LGD object random numbers from the respective model
+
+LGD <- sample(LGD2, N, replace = TRUE) # empirical distribution
+
+LGD <- rBeta(num = N, pi0 = pizero, pi1 = pione, kcomp = 3, pesi = c(0.4479907, 0.2573397, 0.2946696), mu = c(0.02779568, 0.5449694, 0.3678866), sigma = c(0.16846543, 0.6596027, 0.4385094)) # example of beta
+
+LGD <- rGIB1(num = N, pi0 = pizero, pi1 = pione, kcomp = 2, pesi = c(0.5908123, 0.4091877), mu = c(0.4370421, 0.07827023), sigma = c(0.6500144, 0.27812171), nu = c(0.4848590, 0.24462502), tau = c(1.4844423, 1.05184859)) # example of GB1
+
+LGD <- randlogit(num = N, pi0 = pizero, pi1 = pione, gen = "LO", kcomp = 3, pesi = c(0.3051853, 0.5189412, 0.1758735), mu = c(-0.1899092, -3.6389664, -0.1232451), sigma = c(1.5432334, 0.8960431, 0.4205417)) # example of logit logistic
+
+LGD <- rkGauss(N, density = KGS, db = LGD2) # example of GK model
+
+LGD <- sample(gridx, N, replace = TRUE, prob = Chen@densityCache) # example of C-BK model
+
+LGD <- sample(gridxSP, N, replace = TRUE, prob = gridySP) # example of H-BK model
+
+LGD <- CZ(N, pi0 = pizero, pi1 = pione, gridx = gridxCZ, gridy = gridyCZ)$total # example of CZ-BK model
+
+# Then put together in a portfolio and compute the portfolio losses
+
+Portfolio <- data.frame(ID, PD, EAD, LGD)
+
+pb <- tkProgressBar(title = "Progress bar", min = 0, max = boot, width = 300)
+for (m in 1:boot) {
+  setTkProgressBar(pb, m, label = paste(
+    round(m / boot * 100, 0),
+    "% done"
+  ))
+  Loss <- 0
+  T <- rnorm(1, mean = 0, sd = 1) # generate common risk factor
+
+  Tvar <- rnorm(N, mean = 0, sd = 1) # generate N idiosyncratic risk factors
+
+  for (i in 1:N) {
+    X <- sqrt(rho) * T + sqrt(1 - rho) * Tvar[i] # evaluate X for each loan i
+
+    threshold <- qnorm(Portfolio$PD[i], mean = 0, sd = 1) # set loan i's default threshold
+    if (X < threshold) {
+      Loss <- Loss + Portfolio$LGD[i] * Portfolio$EAD[i] ## maintaining a running total of Losses
+    }
+  }
+  res[m] <- Loss # total portfolio loss per iteration
+}
+close(pb)
+
+round(stats::quantile(res, probs = 0.99), digits = 2) # VaR 99%
