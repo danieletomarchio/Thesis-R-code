@@ -9,6 +9,8 @@ library(devtools)
 install_version("kdensity", version = "1.0.0", repos = "http://cran.us.r-project.org")
 library(kdensity)
 
+# Load the functions of the Function.R file
+
 data <- (read.xlsx("Dataset A.xlsx")) # insert the directory of the file
 
 LGD2 <- as.numeric(data$LGD) # Dataset on [0,1]
