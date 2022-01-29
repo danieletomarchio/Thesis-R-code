@@ -1,1 +1,1362 @@
+library(LaplacesDemon)
+library(corpcor)
+library(zipfR)
+library(expint)
+library(foreach)
+library(doSNOW)
+library(mtin) # this package can be downloaded at http://docenti.unict.it/punzo/Rpackages.htm
+
+Mix_Nor_MV <- function(X, k, init.par = NULL, nstartG = 10, nThreads = 10, tol = 0.001) {
+
+  # Fuctions
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMVnorm <- function(X, M, U, V) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    pdf <- (2 * pi)^(-(p * r) / 2) * det(U)^(-r / 2) * det(V)^(-p / 2) * exp(-1 / 2 * delta)
+
+    return(pdf)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(X) # rows of X ;
+  r <- ncol(X) # columns of X;
+
+  # Create some objects
+
+  prior <- numeric(k)
+  M <- array(0, dim = c(p, r, k))
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+  tempM <- array(0, dim = c(p, r, num))
+
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  z <- matrix(0, nrow = num, ncol = k)
+
+  mu <- matrix(0, nrow = (p * r), ncol = k)
+  Sigma <- array(0, dim = c((p * r), (p * r), k))
+  pll <- NULL
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+
+  ### Algorithm ###
+
+  oper0 <- init.par
+
+  print(paste0("Fitting Matrix Normal Mixtures with k=", k))
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  oper1 <- foreach(l = 1:nstartG, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list())) %dopar% {
+    prior <- oper0[[1]][[l]]
+    M <- oper0[[2]][[l]]
+    sigmaU <- oper0[[3]][[l]]
+    sigmaV <- oper0[[4]][[l]]
+
+    try(while (check < 1) {
+
+      # E - STEP
+
+      for (j in 1:k) {
+        dens[, j] <- dMVnorm(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      z <- numerator / mixt.dens
+
+      # M - STEP
+
+      for (j in 1:k) {
+        for (t in 1:num) {
+          tempM[, , t] <- z[t, j] * X[, , t]
+        }
+
+        M[, , j] <- rowSums(tempM, dims = 2) / sum(z[, j])
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j] * (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j] * t(X[, , i] - M[, , j]) %*% solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j])
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j]))
+      }
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z)
+      }
+
+      for (j in 1:k) {
+        dens[, j] <- dMVnorm(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+      loglik.old <- loglik.new
+    })
+
+    list(prior, M, sigmaU, sigmaV, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstartG)
+  marks <- numeric(nstartG)
+  checks <- numeric(nstartG)
+  for (j in 1:nstartG) {
+    if (is.null(oper1[[5]][[j]]) | is.null(oper1[[8]][[j]]) | is.null(oper1[[9]][[j]])) {
+      a[j] <- NA
+      marks[j] <- NA
+      checks[j] <- NA
+    } else {
+      a[j] <- oper1[[5]][[j]]
+      marks[j] <- oper1[[8]][[j]]
+      checks[j] <- oper1[[9]][[j]]
+    }
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed, probably because of a bad initialization")
+  }
+
+  prior <- oper1[[1]][[a]]
+  M <- oper1[[2]][[a]]
+  sigmaU <- oper1[[3]][[a]]
+  sigmaV <- oper1[[4]][[a]]
+  loglik.new <- oper1[[5]][[a]]
+  z <- oper1[[6]][[a]]
+  ll <- oper1[[7]][[a]]
+  mark <- oper1[[8]][[a]]
+  check <- oper1[[9]][[a]]
+
+  plot(ll, type = "l", xlab = "Iterations", ylab = "Log-Likelihoods")
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * r) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1)
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, M = M, sigmaU = sigmaU, sigmaV = sigmaV, classification = classification, loglik = loglik.new, ll = ll, mark = mark, check = check, npar = npar, BIC = BIC, z = z))
+}
+Mix_T_MV <- function(X, k, init.par = NULL, nstartG = 10, nThreads = 10, tol = 0.001) {
+
+  # Fuctions
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMVT <- function(X, M, U, V, nu) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    pdfvar <- (1 + delta / nu)^(-0.5 * ((p * r) + nu))
+    pdfconst <- (det(U)^(-r / 2) * det(V)^(-p / 2) * gamma(0.5 * ((p * r) + nu))) / ((pi * nu)^(0.5 * (p * r)) * gamma(nu * 0.5))
+
+    PDF <- pdfconst * pdfvar
+
+    return(PDF)
+  }
+  Mstep_AECM <- function(X, weights = NULL, M, sigmaU, sigmaV) {
+    n <- dim(X)[3]
+    if (is.null(weights)) {
+      weights <- rep(1, n)
+    }
+    f <- function(par, weights, X, M, sigmaU, sigmaV) {
+      theta <- par
+      pll <- sum(weights * log(dMVT(X = X, M = M, U = sigmaU, V = sigmaV, nu = theta)))
+      return(pll)
+    }
+    res <- stats::optimize(
+      f = f, interval = c(0, 50), weights = weights,
+      X = X, M = M, sigmaU = sigmaU, sigmaV = sigmaV, maximum = TRUE
+    )
+    theta <- res$maximum
+    return(theta)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(X) # rows of X
+  r <- ncol(X) # columns of X
+
+  # Create some objects
+
+  prior <- numeric(k)
+  M <- array(0, dim = c(p, r, k))
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+  nu <- rep(0, k)
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+  tempM <- array(0, dim = c(p, r, num))
+
+  w <- matrix(0, nrow = num, ncol = k)
+  logw <- matrix(0, nrow = num, ncol = k)
+
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  z <- matrix(0, nrow = num, ncol = k)
+
+  mu <- matrix(0, nrow = (p * r), ncol = k)
+  Sigma <- array(0, dim = c((p * r), (p * r), k))
+  pll <- NULL
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+
+  ### Algorithm ###
+
+  oper0 <- init.par
+
+  print(paste0("Fitting Matrix T Mixtures with k=", k))
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  oper1 <- foreach(l = 1:nstartG, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list(), list())) %dopar% {
+    prior <- oper0[[1]][[l]]
+    M <- oper0[[2]][[l]]
+    sigmaU <- oper0[[3]][[l]]
+    sigmaV <- oper0[[4]][[l]]
+    nu <- oper0[[5]][[l]]
+
+    try(while (check < 1) {
+
+      # E - STEP
+
+      for (j in 1:k) {
+        dens[, j] <- dMVT(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], nu = nu[j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      z <- numerator / mixt.dens
+
+      for (j in 1:k) {
+        delta <- sapply(1:num, function(i) tr(solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])))
+
+        numer <- (p * r) + nu[j]
+        den <- nu[j] + delta
+
+        numer[numer < .Machine$double.xmin] <- .Machine$double.xmin
+        den[den < .Machine$double.xmin] <- .Machine$double.xmin
+
+        w[, j] <- numer / den
+      }
+
+      for (j in 1:k) {
+        delta <- sapply(1:num, function(i) tr(solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])))
+
+        numer <- digamma(((p * r) + nu[j]) / 2)
+        den <- log(0.5 * (nu[j] + delta))
+
+        numer[numer < .Machine$double.xmin] <- .Machine$double.xmin
+        den[den < .Machine$double.xmin] <- .Machine$double.xmin
+
+        logw[, j] <- numer - den
+      }
+
+      # M - STEP
+
+      for (j in 1:k) {
+        for (t in 1:num) {
+          tempM[, , t] <- w[t, j] * z[t, j] * X[, , t]
+        }
+
+        M[, , j] <- rowSums(tempM, dims = 2) / sum(w[, j] * z[, j])
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j] * w[i, j] * (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j] * w[i, j] * t(X[, , i] - M[, , j]) %*% solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j])
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j]))
+      }
+
+      for (j in 1:k) {
+        nu[j] <- Mstep_AECM(X = X, weights = z[, j], M = M[, , j], sigmaU = sigmaU[, , j], sigmaV = sigmaV[, , j])
+      }
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z)
+      }
+
+      for (j in 1:k) {
+        dens[, j] <- dMVT(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], nu = nu[j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+      loglik.old <- loglik.new
+    })
+
+    list(prior, M, sigmaU, sigmaV, nu, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstartG)
+  marks <- numeric(nstartG)
+  checks <- numeric(nstartG)
+  for (j in 1:nstartG) {
+    if (is.null(oper1[[6]][[j]]) | is.null(oper1[[9]][[j]]) | is.null(oper1[[10]][[j]])) {
+      a[j] <- NA
+      marks[j] <- NA
+      checks[j] <- NA
+    } else {
+      a[j] <- oper1[[6]][[j]]
+      marks[j] <- oper1[[9]][[j]]
+      checks[j] <- oper1[[10]][[j]]
+    }
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed, probably because of a bad initialization")
+  }
+
+  prior <- oper1[[1]][[a]]
+  M <- oper1[[2]][[a]]
+  sigmaU <- oper1[[3]][[a]]
+  sigmaV <- oper1[[4]][[a]]
+  nu <- oper1[[5]][[a]]
+  loglik.new <- oper1[[6]][[a]]
+  z <- oper1[[7]][[a]]
+  ll <- oper1[[8]][[a]]
+  mark <- oper1[[9]][[a]]
+  check <- oper1[[10]][[a]]
+
+  plot(ll, type = "l", xlab = "Iterations", ylab = "Log-Likelihoods")
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * r) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1) + k
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, M = M, sigmaU = sigmaU, sigmaV = sigmaV, nu = nu, classification = classification, loglik = loglik.new, ll = ll, mark = mark, check = check, npar = npar, BIC = BIC, z = z))
+}
+Mix_Sen_MV <- function(X, k, init.par = NULL, nstartG = 10, nThreads = 10, tol = 0.001) {
+
+  # Fuctions
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMVsen <- function(X, M, U, V, theta) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    intf <- function(w, gamm) {
+      w^((p * r) / 2) * exp(-w * gamm)
+    }
+    pdfinteg <- sapply(1:num, function(i) stats::integrate(intf, lower = 1, upper = Inf, gamm = delta[i] / 2 + theta)$value)
+    pdfconst <- (2 * pi)^(-(p * r) / 2) * theta * exp(theta) * det(U)^(-r / 2) * det(V)^(-p / 2)
+    PDF <- pdfconst * pdfinteg
+
+    return(PDF)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(X) # rows of X
+  r <- ncol(X) # columns of X
+
+  # Create some objects
+
+  prior <- numeric(k)
+  M <- array(0, dim = c(p, r, k))
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+  theta <- rep(0, k)
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+  tempM <- array(0, dim = c(p, r, num))
+
+  w <- matrix(0, nrow = num, ncol = k)
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  z <- matrix(0, nrow = num, ncol = k)
+
+  mu <- matrix(0, nrow = (p * r), ncol = k)
+  Sigma <- array(0, dim = c((p * r), (p * r), k))
+  pll <- NULL
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+
+  ### Algorithm ###
+
+  oper0 <- init.par
+
+  print(paste0("Fitting Matrix Sen Mixtures with k=", k))
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  oper1 <- foreach(l = 1:nstartG, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list(), list())) %dopar% {
+    prior <- oper0[[1]][[l]]
+    M <- oper0[[2]][[l]]
+    sigmaU <- oper0[[3]][[l]]
+    sigmaV <- oper0[[4]][[l]]
+    theta <- oper0[[5]][[l]]
+
+    try(while (check < 1) {
+
+      # E - STEP
+
+      for (j in 1:k) {
+        dens[, j] <- dMVsen(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], theta = theta[j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      z <- numerator / mixt.dens
+
+      for (j in 1:k) {
+        delta <- sapply(1:num, function(i) tr(solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])))
+
+        numer <- expint::gammainc(a = ((p * r) / 2 + 2), x = (delta / 2 + theta[j]))
+        den <- (delta / 2 + theta[j]) * expint::gammainc(a = ((p * r) / 2 + 1), x = (delta / 2 + theta[j]))
+
+        numer[numer < .Machine$double.xmin] <- .Machine$double.xmin
+        den[den < .Machine$double.xmin] <- .Machine$double.xmin
+
+        w[, j] <- numer / den
+      }
+
+      # M - STEP
+
+      for (j in 1:k) {
+        for (t in 1:num) {
+          tempM[, , t] <- w[t, j] * z[t, j] * X[, , t]
+        }
+
+        M[, , j] <- rowSums(tempM, dims = 2) / sum(w[, j] * z[, j])
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j] * w[i, j] * (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j] * w[i, j] * t(X[, , i] - M[, , j]) %*% solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j])
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j]))
+      }
+
+      for (j in 1:k) {
+        theta[j] <- sum(z[, j]) / (sum(z[, j] * (w[, j] - 1)))
+      }
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z)
+      }
+
+      for (j in 1:k) {
+        dens[, j] <- dMVsen(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], theta = theta[j])
+      }
+
+      dens[dens < .Machine$double.xmin] <- .Machine$double.xmin
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+      loglik.old <- loglik.new
+    })
+
+    list(prior, M, sigmaU, sigmaV, theta, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstartG)
+  marks <- numeric(nstartG)
+  checks <- numeric(nstartG)
+  for (j in 1:nstartG) {
+    if (is.null(oper1[[6]][[j]]) | is.null(oper1[[9]][[j]]) | is.null(oper1[[10]][[j]])) {
+      a[j] <- NA
+      marks[j] <- NA
+      checks[j] <- NA
+    } else {
+      a[j] <- oper1[[6]][[j]]
+      marks[j] <- oper1[[9]][[j]]
+      checks[j] <- oper1[[10]][[j]]
+    }
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed, probably because of a bad initialization")
+  }
+
+  prior <- oper1[[1]][[a]]
+  M <- oper1[[2]][[a]]
+  sigmaU <- oper1[[3]][[a]]
+  sigmaV <- oper1[[4]][[a]]
+  theta <- oper1[[5]][[a]]
+  loglik.new <- oper1[[6]][[a]]
+  z <- oper1[[7]][[a]]
+  ll <- oper1[[8]][[a]]
+  mark <- oper1[[9]][[a]]
+  check <- oper1[[10]][[a]]
+
+  plot(ll, type = "l", xlab = "Iterations", ylab = "Log-Likelihoods")
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * r) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1) + k
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, M = M, sigmaU = sigmaU, sigmaV = sigmaV, theta = theta, classification = classification, loglik = loglik.new, ll = ll, mark = mark, check = check, npar = npar, BIC = BIC, z = z))
+}
+Mix_Tin_MV <- function(X, k, init.par = NULL, nstartG = 10, nThreads = 10, tol = 0.001, Mstep = "AECM", method = "BFGS") {
+
+  # Fuctions
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMVtin <- function(X, M, U, V, theta) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    intf <- function(w, del) {
+      w^((p * r) / 2) * exp((-w / 2) * del)
+    }
+    pdfinteg <- sapply(1:num, function(i) stats::integrate(intf, lower = (1 - theta), upper = 1, del = delta[i])$value)
+    pdfconst <- (2 * pi)^(-(p * r) / 2) * (1 / theta) * det(U)^(-r / 2) * det(V)^(-p / 2)
+    PDF <- pdfconst * pdfinteg
+
+    return(PDF)
+  }
+  Mstep_AECM <- function(X, weights = NULL, M, sigmaU, sigmaV) {
+    n <- dim(X)[3]
+    if (is.null(weights)) {
+      weights <- rep(1, n)
+    }
+    f <- function(par, weights, X, M, sigmaU, sigmaV) {
+      theta <- par
+      pll <- sum(weights * log(dMVtin(X = X, M = M, U = sigmaU, V = sigmaV, theta = theta)))
+      return(pll)
+    }
+    res <- stats::optimize(
+      f = f, interval = c(0, 1), weights = weights,
+      X = X, M = M, sigmaU = sigmaU, sigmaV = sigmaV, maximum = TRUE
+    )
+    theta <- res$maximum
+    return(theta)
+  }
+  Mstep_ECME <- function(X, k, z, M, sigmaU, sigmaV, prior, method = method, maxit = 1000, trace = 0) {
+    n <- dim(X)[3]
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    startpar <- numeric(k)
+    vecX <- matrix(0, nrow = n, ncol = p * r)
+    for (i in 1:n) {
+      vecX[i, ] <- as.vector(X[, , i])
+    }
+
+    for (j in 1:k) {
+      tempfit <- WMM(X = vecX, weights = z[, j])
+      startpar[j] <- tempfit$theta
+    }
+
+    initial.values <- log(startpar / (1 - startpar))
+
+    f <- function(par, X, M, k, sigmaU, sigmaV, prior) {
+      replace(par, par < -730, -730)
+      replace(par, par > 16, 16)
+      theta <- exp(par) / (1 + exp(par))
+      product <- matrix(0, nrow = n, ncol = k)
+
+      for (j in 1:k) {
+        product[, j] <- prior[j] * dMVtin(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], theta = theta[j])
+      }
+
+      pll <- sum(log(rowSums(product)))
+
+      return(pll)
+    }
+
+    res <- stats::optim(par = initial.values, fn = f, X = X, M = M, k = k, sigmaU = sigmaU, sigmaV = sigmaV, prior = prior, method = method, control = list(maxit = maxit, fnscale = -1, trace = trace))
+
+    theta <- exp(res$par) / (1 + exp(res$par))
+
+    return(theta)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(X) # rows of X
+  r <- ncol(X) # columns of X
+
+  # Create some objects
+
+  prior <- numeric(k)
+  M <- array(0, dim = c(p, r, k))
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+  theta <- rep(0, k)
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+  tempM <- array(0, dim = c(p, r, num))
+
+  w <- matrix(0, nrow = num, ncol = k)
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  z <- matrix(0, nrow = num, ncol = k)
+
+  mu <- matrix(0, nrow = (p * r), ncol = k)
+  Sigma <- array(0, dim = c((p * r), (p * r), k))
+  pll <- NULL
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+
+  ### Algorithm ####
+
+  oper0 <- init.par
+
+  print(paste(paste(paste("Fitting Matrix Tin Mixtures with k =", k), paste("and", Mstep)), paste("algorithm")))
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  oper1 <- foreach(l = 1:nstartG, .combine = "comb", .packages = c("LaplacesDemon", "corpcor", "mtin"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list(), list())) %dopar% {
+    prior <- oper0[[1]][[l]]
+    M <- oper0[[2]][[l]]
+    sigmaU <- oper0[[3]][[l]]
+    sigmaV <- oper0[[4]][[l]]
+    theta <- oper0[[5]][[l]]
+
+    try(while (check < 1) {
+
+      # E - STEP
+
+      for (j in 1:k) {
+        dens[, j] <- dMVtin(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], theta = theta[j])
+      }
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      z <- numerator / mixt.dens
+
+      for (j in 1:k) {
+        delta <- sapply(1:num, function(i) tr(solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])))
+
+        numer <- 2 * (zipfR::Igamma(a = ((p * r) / 2 + 2), x = (1 - theta[j]) * delta / 2, lower = FALSE) - zipfR::Igamma(a = ((p * r) / 2 + 2), x = delta / 2, lower = FALSE))
+        den <- delta * (zipfR::Igamma(a = ((p * r) / 2 + 1), x = (1 - theta[j]) * delta / 2, lower = FALSE) - zipfR::Igamma(a = ((p * r) / 2 + 1), x = delta / 2, lower = FALSE))
+        w[, j] <- numer / den
+      }
+
+      # CM1-STEP
+
+      for (j in 1:k) {
+        for (t in 1:num) {
+          tempM[, , t] <- w[t, j] * z[t, j] * X[, , t]
+        }
+
+        M[, , j] <- rowSums(tempM, dims = 2) / sum(w[, j] * z[, j])
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j] * w[i, j] * (X[, , i] - M[, , j]) %*% solve(sigmaV[, , j]) %*% t(X[, , i] - M[, , j])
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j] * w[i, j] * t(X[, , i] - M[, , j]) %*% solve(sigmaU[, , j]) %*% (X[, , i] - M[, , j])
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      }
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j]))
+      }
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z)
+      }
+
+      # CM2-STEP
+
+      if (Mstep == "AECM") {
+        for (j in 1:k) {
+          theta[j] <- Mstep_AECM(X = X, weights = z[, j], M = M[, , j], sigmaU = sigmaU[, , j], sigmaV = sigmaV[, , j])
+        }
+      }
+      if (Mstep == "ECME") {
+        theta <- Mstep_ECME(X = X, k = k, z = z, M = M, sigmaU = sigmaU, sigmaV = sigmaV, prior = prior, method = method)
+      }
+
+      for (j in 1:k) {
+        dens[, j] <- dMVtin(X = X, M = M[, , j], U = sigmaU[, , j], V = sigmaV[, , j], theta = theta[j])
+      }
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+      loglik.old <- loglik.new
+    })
+
+    list(prior, M, sigmaU, sigmaV, theta, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstartG)
+  marks <- numeric(nstartG)
+  checks <- numeric(nstartG)
+  for (j in 1:nstartG) {
+    if (is.null(oper1[[6]][[j]]) | is.null(oper1[[9]][[j]]) | is.null(oper1[[10]][[j]])) {
+      a[j] <- NA
+      marks[j] <- NA
+      checks[j] <- NA
+    } else {
+      a[j] <- oper1[[6]][[j]]
+      marks[j] <- oper1[[9]][[j]]
+      checks[j] <- oper1[[10]][[j]]
+    }
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed, probably because of a bad initialization")
+  }
+
+  prior <- oper1[[1]][[a]]
+  M <- oper1[[2]][[a]]
+  sigmaU <- oper1[[3]][[a]]
+  sigmaV <- oper1[[4]][[a]]
+  theta <- oper1[[5]][[a]]
+  loglik.new <- oper1[[6]][[a]]
+  z <- oper1[[7]][[a]]
+  ll <- oper1[[8]][[a]]
+  mark <- oper1[[9]][[a]]
+  check <- oper1[[10]][[a]]
+
+  plot(ll, type = "l", xlab = "Iterations", ylab = "Log-Likelihoods")
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * r) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1) + k
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, M = M, sigmaU = sigmaU, sigmaV = sigmaV, theta = theta, classification = classification, loglik = loglik.new, ll = ll, mark = mark, check = check, npar = npar, BIC = BIC, z = z))
+}
+
+Rand.init <- function(X, k, density, init.sec = NULL, nstartR = 100, nstartG = 10, nThreads = 10) {
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMVnorm <- function(X, M, U, V) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    pdf <- (2 * pi)^(-(p * r) / 2) * det(U)^(-r / 2) * det(V)^(-p / 2) * exp(-1 / 2 * delta)
+
+    return(pdf)
+  }
+  dMVT <- function(X, M, U, V, nu) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    pdfvar <- (1 + delta / nu)^(-0.5 * ((p * r) + nu))
+    pdfconst <- (det(U)^(-r / 2) * det(V)^(-p / 2) * gamma(0.5 * ((p * r) + nu))) / ((pi * nu)^(0.5 * (p * r)) * gamma(nu * 0.5))
+
+    PDF <- pdfconst * pdfvar
+
+    return(PDF)
+  }
+  dMVsen <- function(X, M, U, V, theta) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    intf <- function(w, gamm) {
+      w^((p * r) / 2) * exp(-w * gamm)
+    }
+    pdfinteg <- sapply(1:num, function(i) stats::integrate(intf, lower = 1, upper = Inf, gamm = delta[i] / 2 + theta)$value)
+    pdfconst <- (2 * pi)^(-(p * r) / 2) * theta * exp(theta) * det(U)^(-r / 2) * det(V)^(-p / 2)
+    PDF <- pdfconst * pdfinteg
+
+    return(PDF)
+  }
+  dMVtin <- function(X, M, U, V, theta) {
+    num <- dim(X)[3] # sample size
+    p <- nrow(X) # rows of X
+    r <- ncol(X) # columns of X
+
+    if (is.na(num)) {
+      X <- as.matrix(X)
+      delta <- tr(solve(U) %*% (X - M) %*% solve(V) %*% t(X - M))
+    } else {
+      delta <- sapply(1:num, function(i) tr(solve(U) %*% (X[, , i] - M) %*% solve(V) %*% t(X[, , i] - M)))
+    }
+
+    intf <- function(w, del) {
+      w^((p * r) / 2) * exp((-w / 2) * del)
+    }
+    pdfinteg <- sapply(1:num, function(i) stats::integrate(intf, lower = (1 - theta), upper = 1, del = delta[i])$value)
+    pdfconst <- (2 * pi)^(-(p * r) / 2) * (1 / theta) * det(U)^(-r / 2) * det(V)^(-p / 2)
+    PDF <- pdfconst * pdfinteg
+
+    return(PDF)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(X) # rows of X
+  r <- ncol(X) # columns of X
+
+  # Create some objects
+
+  prior <- numeric(k)
+  M <- array(0, dim = c(p, r, k))
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+  theta <- numeric(k)
+
+  ## Random initialization ##
+
+  eu <- matrix(0, nrow = num, ncol = k)
+  classy <- numeric(num)
+  ptllk <- rep(NA, k)
+  wptllk <- rep(NA, k)
+
+  if (is.null(init.sec)) {
+    rand.start <- matrix(0, nstartR, k)
+    for (i in 1:nstartR) {
+      rand.start[i, ] <- sample(c(1:num), k)
+    }
+  } else {
+    rand.start <- init.sec
+  }
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  oper0 <- foreach(l = 1:nstartR, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list())) %dopar% {
+    sec <- rand.start[l, ]
+
+    for (j in 1:k) {
+      M[, , j] <- X[, , sec[j]]
+    }
+
+    for (j in 1:k) {
+      for (i in 1:num) {
+        eu[i, j] <- norm((X[, , i] - M[, , j]), type = "F")
+      }
+    }
+
+    for (i in 1:num) {
+      classy[i] <- which.min(eu[i, ])
+    }
+
+    tempX <- vector(mode = "list", length = k)
+
+    try(for (j in 1:k) {
+      temp.num <- dim(X[, , which(classy == j)])[3]
+      tempX[[j]] <- vector(mode = "list", length = temp.num)
+
+      for (i in 1:temp.num) {
+        tempX[[j]][[i]] <- X[, , which(classy == j)[i]]
+      }
+
+      prior[j] <- temp.num / num
+
+      M[, , j] <- Reduce("+", tempX[[j]]) / temp.num
+
+      sigmaU[, , j] <- Reduce("+", lapply(1:length(tempX[[j]]), function(i) (X[, , which(classy == j)[i]] - M[, , j]) %*% t(X[, , which(classy == j)[i]] - M[, , j]))) / (r * temp.num)
+
+      sigmaV[, , j] <- Reduce("+", lapply(1:length(tempX[[j]]), function(i) (t(X[, , which(classy == j)[i]] - M[, , j])) %*% solve(sigmaU[, , j]) %*% (X[, , which(classy == j)[i]] - M[, , j]))) / (p * temp.num)
+
+      if (density == "norm") {
+        ptllk[j] <- sum(log(dMVnorm(X[, , which(classy == j)], M[, , j], sigmaU[, , j], sigmaV[, , j])))
+        wptllk[j] <- sum(rep(log(prior[j]), temp.num))
+      }
+      if (density == "t") {
+        theta[j] <- runif(1, 1, 15)
+
+        ptllk[j] <- sum(log(dMVT(X[, , which(classy == j)], M[, , j], sigmaU[, , j], sigmaV[, , j], theta[j])))
+        wptllk[j] <- sum(rep(log(prior[j]), temp.num))
+      }
+      if (density == "sen") {
+        theta[j] <- runif(1, 0.05, 1.5)
+
+
+        ptllk[j] <- sum(log(dMVsen(X[, , which(classy == j)], M[, , j], sigmaU[, , j], sigmaV[, , j], theta[j])))
+        wptllk[j] <- sum(rep(log(prior[j]), temp.num))
+      }
+      if (density == "tin") {
+        theta[j] <- runif(1, 0.5, 0.95)
+
+        ptllk[j] <- sum(log(dMVtin(X[, , which(classy == j)], M[, , j], sigmaU[, , j], sigmaV[, , j], theta[j])))
+        wptllk[j] <- sum(rep(log(prior[j]), temp.num))
+      }
+    })
+
+    pll <- try(sum(wptllk) + sum(ptllk))
+
+    list(prior, M, sigmaU, sigmaV, theta, pll)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  df <- data.frame(llk = unlist(oper0[[6]]), pos = c(1:nstartR))
+  df <- dplyr::filter(df, llk != "Error in sum(ptllk) : invalid 'type' (character) of argument\n")
+  if (is.factor(df$llk) == TRUE) {
+    df$llk <- try(as.numeric(levels(df$llk)[df$llk]))
+  }
+  bestR <- head(order(-df$llk), n = nstartG)
+
+  res <- vector(mode = "list", length = 6)
+
+  for (i in 1:6) {
+    res[[i]] <- oper0[[i]][bestR]
+  }
+
+  return(res)
+}
+
+rsenMV <- function(n, M, U, V, theta) {
+  w <- (1 + stats::rexp(n = n, theta))
+  X <- array(0, dim = c(nrow(M), ncol(M), n))
+
+  for (i in 1:n) {
+    X[, , i] <- LaplacesDemon::rmatrixnorm(M = M, U = U / w[i], V = V)
+  }
+
+  return(X)
+}
+rtinMV <- function(n, M, U, V, theta) {
+  w <- stats::runif(n = n, min = 1 - theta, 1)
+  X <- array(0, dim = c(nrow(M), ncol(M), n))
+
+  for (i in 1:n) {
+    X[, , i] <- LaplacesDemon::rmatrixnorm(M = M, U = U / w[i], V = V)
+  }
+
+  return(X)
+}
+Rand.mixt <- function(n, M, U, V, theta, prob, density) {
+  k <- length(prob)
+  p <- dim(M[, , 1])[1]
+  r <- dim(M[, , 1])[2]
+
+  tempX <- vector(mode = "list", length = k)
+  X <- array(0, dim = c(p, r, n))
+
+  z <- t(rmultinom(n, size = 1, prob = prob))
+
+  sizes <- colSums(z)
+
+  for (j in 1:k) {
+    tempX[[j]] <- array(0, dim = c(p, r, sizes[j]))
+
+    if (density == "tin") {
+      w <- stats::runif(n = sizes[j], min = 1 - theta[j], 1)
+    }
+    if (density == "sen") {
+      w <- (1 + stats::rexp(n = sizes[j], theta[j]))
+    }
+    if (density == "t") {
+      w <- stats::rgamma(n = n, theta / 2, theta / 2)
+    }
+    if (density == "norm") {
+      w <- rep(1, n)
+    }
+
+    for (i in 1:sizes[j]) {
+      tempX[[j]][, , i] <- LaplacesDemon::rmatrixnorm(M = M[, , j], U = U[, , j] / w[i], V = V[, , j])
+    }
+  }
+
+  X <- array(unlist(tempX), dim = c(p, r, n))
+
+  return(list(X = X, group.size = sizes))
+}
+
+kurt <- function(p, r, theta, density) {
+  if (density == "norm") {
+    kurtosis <- (p * r) * ((p * r) + 2)
+  }
+  if (density == "sen") {
+    misra <- expint::gammainc(a = 0, x = theta)
+    kurtosis <- (p * r) * ((p * r) + 2) * ((theta / (theta * exp(theta) * misra)^2) * (1 - (theta * exp(theta) * misra)))
+  }
+  if (density == "tin") {
+    kurtosis <- (p * r) * ((p * r) + 2) * (theta^2 / ((1 - theta) * log(1 - theta)^2))
+  }
+  if (density == "t") {
+    kurtosis <- (p * r) * ((p * r) + 2) * ((theta / 2) - 1) / ((theta / 2) - 2)
+  }
+
+  return(kurtosis)
+}
+w.kurt <- function(X, w) {
+  num <- nrow(X)
+
+  numerator <- colSums(X * w)
+  means <- num / sum(w)
+
+  cov <- Reduce("+", lapply(1:num, function(i) w[i] * ((X[i, ] - means) %*% t(X[i, ] - means)))) / (sum(w))
+
+  kurt <- Reduce("+", lapply(1:num, function(i) w[i] * (t(X[i, ] - means) %*% solve(cov) %*% (X[i, ] - means))^2)) / sum(w)
+
+  return(w.kurt = kurt)
+}
 
