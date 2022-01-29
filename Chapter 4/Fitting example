@@ -1,7 +1,7 @@
 install.packages("CASdatasets", repos = "http://cas.uqam.ca/pub/", type = "source")
 library(CASdatasets)
 
-# Load the function in the Functions.R file
+# Load the functions of the Function.R file
 
 ################################
 ### Simulation study example ###
