@@ -1,4 +1,4 @@
-### Instructions:
+### Instructions for the functions:
 
 # Y is a p x r x n array of responses
 # X is a q x r x n array of covariates
