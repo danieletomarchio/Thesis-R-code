@@ -1,1 +1,216 @@
+install.packages("CASdatasets", repos = "http://cas.uqam.ca/pub/", type = "source")
+library(CASdatasets)
+
+# Load the function in the Functions.R file
+
+################################
+### Simulation study example ###
+################################
+
+# -- Gamma - Gamma
+
+Gam.Gam <- vector(mode = "list", length = 9)
+Gam.Gam[[1]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 2.5, den.core = "gam", den.cont = "gam")
+Gam.Gam[[2]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 2.5, den.core = "gam", den.cont = "gam")
+Gam.Gam[[3]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 2.5, den.core = "gam", den.cont = "gam")
+Gam.Gam[[4]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 3.75, den.core = "gam", den.cont = "gam")
+Gam.Gam[[5]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 3.75, den.core = "gam", den.cont = "gam")
+Gam.Gam[[6]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 3.75, den.core = "gam", den.cont = "gam")
+Gam.Gam[[7]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 5, den.core = "gam", den.cont = "gam")
+Gam.Gam[[8]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 5, den.core = "gam", den.cont = "gam")
+Gam.Gam[[9]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 5, den.core = "gam", den.cont = "gam")
+
+# -- Logn - Logn
+
+Logn.Logn <- vector(mode = "list", length = 9)
+Logn.Logn[[1]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 1.5, den.core = "logn", den.cont = "logn")
+Logn.Logn[[2]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 1.5, den.core = "logn", den.cont = "logn")
+Logn.Logn[[3]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 1.5, den.core = "logn", den.cont = "logn")
+Logn.Logn[[4]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 2, den.core = "logn", den.cont = "logn")
+Logn.Logn[[5]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 2, den.core = "logn", den.cont = "logn")
+Logn.Logn[[6]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 2, den.core = "logn", den.cont = "logn")
+Logn.Logn[[7]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 2.5, den.core = "logn", den.cont = "logn")
+Logn.Logn[[8]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 2.5, den.core = "logn", den.cont = "logn")
+Logn.Logn[[9]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 2.5, den.core = "logn", den.cont = "logn")
+
+# -- Gamma - Logn
+
+Gam.Logn <- vector(mode = "list", length = 9)
+Gam.Logn[[1]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 1.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[2]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 1.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[3]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 1.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[4]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 2, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[5]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 2, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[6]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 2, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[7]] <- SimGen(theta = 1, gamma = 1, pi = 0.9, eta = 2.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[8]] <- SimGen(theta = 1, gamma = 1, pi = 0.8, eta = 2.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+Gam.Logn[[9]] <- SimGen(theta = 1, gamma = 1, pi = 0.7, eta = 2.5, gamma.mix = 0.5, den.core = "gam", den.cont = "logn")
+
+# -- Logn - Gamma
+
+Logn.Gam <- vector(mode = "list", length = 9)
+Logn.Gam[[1]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 1, gamma.mix = 5, den.core = "logn", den.cont = "gam")
+Logn.Gam[[2]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 1, gamma.mix = 5, den.core = "logn", den.cont = "gam")
+Logn.Gam[[3]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 1, gamma.mix = 5, den.core = "logn", den.cont = "gam")
+Logn.Gam[[4]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 1, gamma.mix = 10, den.core = "logn", den.cont = "gam")
+Logn.Gam[[5]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 1, gamma.mix = 10, den.core = "logn", den.cont = "gam")
+Logn.Gam[[6]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 1, gamma.mix = 10, den.core = "logn", den.cont = "gam")
+Logn.Gam[[7]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.9, eta = 1, gamma.mix = 15, den.core = "logn", den.cont = "gam")
+Logn.Gam[[8]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.8, eta = 1, gamma.mix = 15, den.core = "logn", den.cont = "gam")
+Logn.Gam[[9]] <- SimGen(theta = 1, gamma = 0.5, pi = 0.7, eta = 1, gamma.mix = 15, den.core = "logn", den.cont = "gam")
+
+
+#########################
+### Real data example ###
+#########################
+
+# -- Choose one dataset
+
+# For Frebiloss data use
+
+data("frebiloss")
+US <- frebiloss$TotalCost / 1000
+
+# For Swefire data, download the SwedishFire.xlsx file
+
+library(openxlsx)
+
+data <- read.xlsx("C:/.../SwedishFire.xlsx") # insert the file location
+US <- data$data
+US <- US[US > 0]
+
+# -- estimates for the compund models: cgam,clogn
+
+fit.US.cgam <- wML(X = US, wi = NULL, density = "cgam", trace = 1)
+fit.US.clogn <- wML(X = US, wi = NULL, density = "clogn", trace = 1)
+
+# -- estimates for the conditional models: gam,logn
+
+fit.US.gam <- wMLref(X = US, wi = NULL, density = "gam", trace = 1)
+fit.US.logn <- wMLref(X = US, wi = NULL, density = "logn", trace = 1)
+
+# -- Other distributions
+
+# Read Table 4.1 to the specific functions to be used for these models
+
+# -- Comparison of results
+
+FinOurRes <- data.frame(
+  "cgam" = c(fit.US.cgam$pseudologlik, fit.US.cgam$BIC),
+  "clogn" = c(fit.US.clogn$pseudologlik, fit.US.clogn$BIC),
+  "gam" = c(fit.US.gam$pseudologlik, fit.US.gam$BIC),
+  "logn" = c(fit.US.logn$pseudologlik, fit.US.logn$BIC)
+)
+
+row.names(FinOurRes) <- c("loglik", "BIC")
+t(FinOurRes)
+
+# -- True Var
+
+Real.US.VaR <- NULL
+Real.US.TVaR <- NULL
+
+sj <- 1
+for (alpha in c(0.95, 0.99)) {
+  Real.US.VaR[sj] <- quantile(US, alpha)
+  Real.US.TVaR[sj] <- mean(US[US >= quantile(US, alpha)])
+  sj <- sj + 1
+}
+
+# -- VaR/TVaR with compund models
+
+VaR.cgam <- VaRfun(p = c(0.95, 0.99), "cgam", fit.US.cgam$theta, fit.US.cgam$gamma, fit.US.cgam$alpha, fit.US.cgam$eta)
+VaR.clogn <- VaRfun(p = c(0.95, 0.99), "clogn", fit.US.clogn$theta, fit.US.clogn$gamma, fit.US.clogn$alpha, fit.US.clogn$eta)
+
+# -- VaR/TVaR conditional distributions
+
+VaR.gam <- VaRfun(p = c(0.95, 0.99), "gam", fit.US.gam$theta, fit.US.gam$gamma)
+VaR.logn <- VaRfun(p = c(0.95, 0.99), "logn", fit.US.logn$theta, fit.US.logn$gamma)
+
+# -- Comparison of results
+
+FinOurResVTV <- data.frame(
+  "True" = c(Real.US.VaR, Real.US.TVaR),
+  "cgam" = c(VaR.cgam$VaR, VaR.cgam$TVaR),
+  "clogn" = c(VaR.clogn$VaR, VaR.clogn$TVaR),
+  "gam" = c(VaR.gam$VaR, VaR.gam$TVaR),
+  "logn" = c(VaR.logn$VaR, VaR.logn$TVaR)
+)
+
+
+row.names(FinOurResVTV) <- c("VaR 95%", "Var 99%", "TVaR 95%", "TVaR 99%")
+
+t(round(FinOurResVTV, digits = 3))
+
+# -- Backtesting VaR
+
+library(rugarch)
+nn <- length(US)
+
+# VaR p-values
+
+alpha1 <- c(0.95, 0.99)
+
+BackV <- list()
+BackV[[1]] <- sapply(1:2, function(i) (VaRTest(alpha = alpha1[i], US, rep(VaR.gam$VaR[i], nn))$uc.LRp))
+BackV[[2]] <- sapply(1:2, function(i) (VaRTest(alpha = alpha1[i], US, rep(VaR.logn$VaR[i], nn))$uc.LRp))
+BackV[[3]] <- sapply(1:2, function(i) (VaRTest(alpha = alpha1[i], US, rep(VaR.cgam$VaR[i], nn))$uc.LRp))
+BackV[[4]] <- sapply(1:2, function(i) (VaRTest(alpha = alpha1[i], US, rep(VaR.clogn$VaR[i], nn))$uc.LRp))
+
+# -- Comparison of VaR Backtesting results
+
+Backvres <- data.frame(
+  "cgam" = BackV[[3]],
+  "clogn" = BackV[[4]],
+  "gam" = BackV[[1]],
+  "logn" = BackV[[2]]
+)
+
+row.names(Backvres) <- c("Kupiec p.v.95%", "Kupiec p.v.99%")
+
+t(round(Backvres, digits = 3))
+
+# -- For TVaR backtesting use the above function at the specified levels. See Section 4.4.1.2
+
+# -- Double Bootstrap Estimation of p , q and k - MoP model ###
+
+library(evt0)
+
+results <- Bootstrap.MoP(data = US, q.set = seq(from = 0, to = 0.9, by = 0.1), nThreads = 8)
+
+n <- length(US)
+osx <- sort(US)
+q <- results$q
+n_q <- floor(n * q) + 1
+x_n_q <- osx[n_q]
+n_new <- length(US) - n_q # new sample size
+rosx <- rev(osx)
+x_new <- rosx[1:n_new] - x_n_q # new sample
+
+# VaR 95%
+Var95 <- as.numeric((osx[n - results$k] - x_n_q) * (results$k / (n * 0.05))^(results$MOP) + x_n_q)
+
+# VaR 99%
+Var99 <- as.numeric((osx[n - results$k] - x_n_q) * (results$k / (n * 0.01))^(results$MOP) + x_n_q)
+
+# -- Pareto t-score
+
+library(actuar)
+library(fitdistrplus)
+
+res2 <- fitdist(US, "pareto")
+
+## T-SCORE
+
+lambda <- uniroot(par.t, data = US, lower = 0.000001, upper = 100000000000000000000000000)$root
+alpha <- lambda * ((sum(1 / (US + lambda))) / (sum(US / (US + lambda))))
+
+actuar::qpareto(0.95, shape = alpha, scale = lambda) # VaR 95%
+actuar::qpareto(0.99, shape = alpha, scale = lambda) # VaR 99%
+
+# -- Double Bootstrap Likelihood ratio test
+
+resGAM <- Bootstrap.LR(data = US, B1 = 500, B2 = 250, dist.H0 = "gam", dist.H1 = "cgam", nThreads = 8)
+
+resLOG <- Bootstrap.LR(data = US, B1 = 500, B2 = 250, dist.H0 = "logn", dist.H1 = "clogn", nThreads = 8)
 
