@@ -1,3 +1,5 @@
+# Load the functions of the Function.R file
+
 ### Example for comparing computational times/parameter recovery of ECME and AECM algorithms of MVTIN-Ms. ####
 
 p   <-3
