@@ -1,1 +1,683 @@
+library(mclust)
+library(LaplacesDemon)
+library(MatManlyMix)
+library(corpcor)
+library(foreach)
+library(doSNOW)
+
+MV_CWM3 <- function(Y, X, k, tol = 0.001, init = "random", nstart = 10, nThreads = 10, maxit = 1000, z = NULL) {
+
+  # Fuctions
+
+  if (nstart > nThreads) {
+    print("Warning: nstart>nThreads. Only nThreads cases are evaluated")
+    print("Set nstart=nThreads and run the algorithm several times, until the desired (or more) nstart number is reached. Then, select the solution with the highest log-likelihood.")
+  }
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMatNorm <- function(A, M, U, V, use.log = FALSE) {
+    n <- nrow(A)
+    p <- ncol(A)
+    AM <- A - M
+
+    log.dens <- (-n * p / 2) * log(2 * pi) - p / 2 * log(det(U)) -
+      n / 2 * log(det(V)) + -1 / 2 * tr((solve(U) %*% AM) %*% (tcrossprod(solve(V), AM)))
+
+    if (use.log == FALSE) {
+      return(exp(log.dens))
+    }
+    else {
+      return(log.dens)
+    }
+  }
+  Posdef <- function(n, ev = runif(n, 0, 10)) {
+    Z <- matrix(ncol = n, rnorm(n^2))
+    decomp <- qr(Z)
+    Q <- qr.Q(decomp)
+    R <- qr.R(decomp)
+    d <- diag(R)
+    ph <- d / abs(d)
+    O <- Q %*% diag(ph)
+    Z <- t(O) %*% diag(ev) %*% O
+    return(Z)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(Y) # rows of Y ; rows of Theta
+  r <- ncol(Y) # columns of Y; columns of X
+  q <- nrow(X) + 1 # columns of Theta; rows of X
+
+  # Add intercept to X
+
+  unos <- rep(1, r)
+  X1 <- array(0, dim = c(q, r, num))
+  for (i in 1:num) {
+    X1[, , i] <- rbind(unos, X[, , i])
+  }
+
+  # Create some objects
+
+  prior <- numeric(k)
+  coeff <- array(0, dim = c(p, q, k))
+  mu.C <- array(0, dim = c((q - 1), r, k))
+
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+
+  sigmaU.C <- array(0, dim = c((q - 1), (q - 1), k))
+  sigmaV.C <- array(0, dim = c(r, r, k))
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+
+  WR.C <- array(0, dim = c((q - 1), (q - 1), k))
+  WC.C <- array(0, dim = c(r, r, k))
+
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+
+  tempWR.C <- array(0, dim = c((q - 1), (q - 1), num))
+  tempWC.C <- array(0, dim = c(r, r, num))
+
+  bt1 <- array(0, dim = c(p, q, num))
+  bt2 <- array(0, dim = c(q, q, num))
+  tempmu <- array(0, dim = c((q - 1), r, num))
+
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  mu <- array(0, dim = c(q - 1, r, num))
+
+  ### Initialization objects ###
+
+  # Preliminary definition of convergence criterions
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+  contatore <- 0
+
+  ### Random initialization ####
+
+  # Z initialization
+
+  if (is.null(z)) {
+    if (init == "random") {
+      z <- array(0, dim = c(num, k, nstart))
+      for (s in 1:nstart) {
+        zinit <- matrix(runif(num * k), nrow = num)
+        zinit <- zinit / rowSums(zinit)
+        z[, , s] <- zinit
+      }
+    }
+
+    if (init == "mixture") {
+      nstart <- 1
+      nThreads <- 1
+
+      z <- array(0, dim = c(num, k, nstart))
+      dati_Iniz <- array(0, dim = c((p + q - 1), r, num)) # metto il -1 per togliere la riga di 1 intercetta
+
+      for (i in 1:num) {
+        dati_Iniz[, , i] <- rbind(Y[, , i], X[, , i])
+      }
+
+      temp.init <- MatManly.init(Y = dati_Iniz, K = k)
+      temp.EM <- MatManly.EM(Y = dati_Iniz, initial = temp.init)
+
+      z[, , 1] <- unmap(classification = temp.EM$id)
+    }
+
+    if (init == "kmeans") {
+      nstart <- 1
+      nThreads <- 1
+
+      z <- array(0, dim = c(num, k, nstart))
+
+      compl.DataY <- matrix(0, nrow = num, ncol = p * r)
+      for (i in 1:num) {
+        compl.DataY[i, ] <- Y[, , i]
+      }
+      compl.DataX <- matrix(0, nrow = num, ncol = (q - 1) * r)
+      for (i in 1:num) {
+        compl.DataX[i, ] <- c(X[, , i])
+      }
+
+      compl.Data <- cbind(compl.DataY, compl.DataX)
+
+      temp.km <- kmeans(x = compl.Data, centers = k)
+
+      z[, , 1] <- unmap(classification = temp.km[["cluster"]])
+    }
+  }
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  pb <- txtProgressBar(max = nThreads, style = 3)
+  progress <- function(n) setTxtProgressBar(pb, n)
+  opts <- list(progress = progress)
+
+  oper <- foreach(l = 1:nstart, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list()), .options.snow = opts) %dopar% {
+
+    # Y
+
+    for (j in 1:k) {
+      sigmaV[, , j] <- Posdef(r)
+    }
+
+    # X
+
+    for (j in 1:k) {
+      sigmaV.C[, , j] <- Posdef(r)
+    }
+
+    try(while (check < 1) {
+      contatore <- contatore + 1
+
+      # M-STEP
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z[, , l])
+      }
+
+      ##### Parameters related to Y|X=x ####
+
+      # Coefficient Matrix
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          bt1[, , i] <- z[i, j, l] * Y[, , i] %*% tcrossprod(solve(sigmaV[, , j]), X1[, , i])
+          bt2[, , i] <- z[i, j, l] * X1[, , i] %*% tcrossprod(solve(sigmaV[, , j]), X1[, , i])
+        }
+
+        coeff[, , j] <- rowSums(bt1, dims = 2) %*% solve(rowSums(bt2, dims = 2))
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j, l] * (Y[, , i] - (coeff[, , j] %*% X1[, , i])) %*% solve(sigmaV[, , j]) %*% t(Y[, , i] - (coeff[, , j] %*% X1[, , i]))
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      } # Aggiornamento WR
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j, l]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j, l] * t(Y[, , i] - (coeff[, , j] %*% X1[, , i])) %*% solve(sigmaU[, , j]) %*% (Y[, , i] - (coeff[, , j] %*% X1[, , i]))
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      } # Aggiornamento WC
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j, l]))
+      }
+
+      ##### Parameters related to X ####
+
+      # Mean Matrix
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          mu[, , i] <- z[i, j, l] * X[, , i]
+        }
+
+        mu.C[, , j] <- rowSums(mu, dims = 2) / (sum(z[, j, l]))
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR.C[, , i] <- z[i, j, l] * (X[, , i] - mu.C[, , j]) %*% solve(sigmaV.C[, , j]) %*% t(X[, , i] - mu.C[, , j])
+        }
+
+        WR.C[, , j] <- rowSums(tempWR.C, dims = 2)
+      } # Aggiornamento WR
+
+      for (j in 1:k) {
+        sigmaU.C[, , j] <- WR.C[, , j] / (r * sum(z[, j, l]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC.C[, , i] <- z[i, j, l] * t(X[, , i] - mu.C[, , j]) %*% solve(sigmaU.C[, , j]) %*% (X[, , i] - mu.C[, , j])
+        }
+
+        WC.C[, , j] <- rowSums(tempWC.C, dims = 2)
+      } # Aggiornamento WC
+
+      for (j in 1:k) {
+        sigmaV.C[, , j] <- WC.C[, , j] / ((q - 1) * sum(z[, j, l]))
+      }
+
+      # Densità
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          dens[i, j] <- dMatNorm(A = Y[, , i], M = coeff[, , j] %*% X1[, , i], U = sigmaU[, , j], V = sigmaV[, , j]) * dMatNorm(A = X[, , i], M = mu.C[, , j], U = sigmaU.C[, , j], V = sigmaV.C[, , j])
+        }
+      }
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (contatore == (maxit + 1)) {
+        check <- 1
+        print("Warning: Maxit reached")
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+      loglik.old <- loglik.new
+
+      # E-STEP
+
+      z[, , l] <- numerator / mixt.dens
+    })
+
+    list(prior, coeff, sigmaU, sigmaV, mu.C, sigmaU.C, sigmaV.C, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstart)
+  marks <- numeric(nstart)
+  checks <- numeric(nstart)
+
+  for (j in 1:nstart) {
+    a[j] <- oper[[8]][[j]]
+    marks[j] <- oper[[11]][[j]]
+    checks[j] <- oper[[12]][[j]]
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed to converge, probably because of a bad initialization")
+  }
+
+  prior <- oper[[1]][[a]]
+  coeff <- oper[[2]][[a]]
+  sigmaU <- oper[[3]][[a]]
+  sigmaV <- oper[[4]][[a]]
+  mu.C <- oper[[5]][[a]]
+  sigmaU.C <- oper[[6]][[a]]
+  sigmaV.C <- oper[[7]][[a]]
+  loglik.new <- oper[[8]][[a]]
+  z <- oper[[9]][[a]][, , a]
+  ll <- oper[[10]][[a]]
+  mark <- oper[[11]][[a]]
+  check <- oper[[12]][[a]]
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * q) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1 + ((q - 1) * r) + ((q - 1) * ((q - 1) + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1)
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, coeff = coeff, sigmaU = sigmaU, sigmaV = sigmaV, mu.C = mu.C, sigmaU.C = sigmaU.C, sigmaV.C = sigmaV.C, classification = classification, loglik = loglik.new, mark = mark, check = check, npar = npar, BIC = BIC))
+}
+
+MV_CF3 <- function(Y, X, k, tol = 0.001, init = "random", nstart = 10, nThreads = 10, maxit = 1000, z = NULL) {
+
+  # Fuctions
+
+  if (nstart > nThreads) {
+    print("Warning: nstart>nThreads. Only nThreads cases are evaluated")
+    print("Set nstart=nThreads and run the algorithm several times, until the desired (or more) nstart number is reached. Then, select the solution with the highest log-likelihood.")
+  }
+
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  dMatNorm <- function(A, M, U, V, use.log = FALSE) {
+    n <- nrow(A)
+    p <- ncol(A)
+    AM <- A - M
+
+    log.dens <- (-n * p / 2) * log(2 * pi) - p / 2 * log(det(U)) -
+      n / 2 * log(det(V)) + -1 / 2 * tr((solve(U) %*% AM) %*% (tcrossprod(solve(V), AM)))
+
+    if (use.log == FALSE) {
+      return(exp(log.dens))
+    }
+    else {
+      return(log.dens)
+    }
+  }
+  Posdef <- function(n, ev = runif(n, 0, 10)) {
+    Z <- matrix(ncol = n, rnorm(n^2))
+    decomp <- qr(Z)
+    Q <- qr.Q(decomp)
+    R <- qr.R(decomp)
+    d <- diag(R)
+    ph <- d / abs(d)
+    O <- Q %*% diag(ph)
+    Z <- t(O) %*% diag(ev) %*% O
+    return(Z)
+  }
+
+  # Dimensions
+
+  num <- dim(X)[3] # sample size
+  p <- nrow(Y) # rows of Y ; rows of Theta
+  r <- ncol(Y) # columns of Y; columns of X
+  q <- nrow(X) + 1 # columns of Theta; rows of X
+
+  # Add intercept to X
+
+  unos <- rep(1, r)
+  X1 <- array(0, dim = c(q, r, num))
+  for (i in 1:num) {
+    X1[, , i] <- rbind(unos, X[, , i])
+  }
+
+  # Create some objects
+
+  prior <- numeric(k)
+  coeff <- array(0, dim = c(p, q, k))
+
+  sigmaU <- array(0, dim = c(p, p, k))
+  sigmaV <- array(0, dim = c(r, r, k))
+
+  WR <- array(0, dim = c(p, p, k))
+  WC <- array(0, dim = c(r, r, k))
+
+  tempWR <- array(0, dim = c(p, p, num))
+  tempWC <- array(0, dim = c(r, r, num))
+
+  bt1 <- array(0, dim = c(p, q, num))
+  bt2 <- array(0, dim = c(q, q, num))
+  tempmu <- array(0, dim = c((q - 1), r, num))
+
+  dens <- array(0, c(num, k), dimnames = list(1:num, paste("comp.", 1:k, sep = "")))
+  mu <- array(0, dim = c(q - 1, r, num))
+
+  ### Initialization objects ###
+
+  # Preliminary definition of convergence criterions
+
+  check <- 0
+  loglik.old <- -Inf
+  loglik.new <- NULL
+  ll <- NULL
+  mark <- 1
+  contatore <- 0
+
+  ### Random initialization ####
+
+  if (is.null(z)) {
+    if (init == "random") {
+      z <- array(0, dim = c(num, k, nstart))
+      for (s in 1:nstart) {
+        zinit <- matrix(runif(num * k), nrow = num)
+        zinit <- zinit / rowSums(zinit)
+        z[, , s] <- zinit
+      }
+    }
+
+    if (init == "mixture") {
+      nstart <- 1
+      nThreads <- 1
+
+      z <- array(0, dim = c(num, k, nstart))
+      dati_Iniz <- array(0, dim = c((p + q - 1), r, num)) # metto il -1 per togliere la riga di 1 intercetta
+
+      for (i in 1:num) {
+        dati_Iniz[, , i] <- rbind(Y[, , i], X[, , i])
+      }
+
+      temp.init <- MatManly.init(Y = dati_Iniz, K = k)
+      temp.EM <- MatManly.EM(Y = dati_Iniz, initial = temp.init)
+
+      z[, , 1] <- unmap(classification = temp.EM$id)
+    }
+
+    if (init == "kmeans") {
+      nstart <- 1
+      nThreads <- 1
+
+      z <- array(0, dim = c(num, k, nstart))
+
+      compl.DataY <- matrix(0, nrow = num, ncol = p * r)
+      for (i in 1:num) {
+        compl.DataY[i, ] <- Y[, , i]
+      }
+      compl.DataX <- matrix(0, nrow = num, ncol = (q - 1) * r)
+      for (i in 1:num) {
+        compl.DataX[i, ] <- c(X[, , i])
+      }
+
+      compl.Data <- cbind(compl.DataY, compl.DataX)
+
+      temp.km <- kmeans(x = compl.Data, centers = k)
+
+      z[, , 1] <- unmap(classification = temp.km[["cluster"]])
+    }
+  }
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  pb <- txtProgressBar(max = nThreads, style = 3)
+  progress <- function(n) setTxtProgressBar(pb, n)
+  opts <- list(progress = progress)
+
+  oper <- foreach(l = 1:nstart, .combine = "comb", .packages = c("LaplacesDemon", "corpcor"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list()), .options.snow = opts) %dopar% {
+
+    # Y
+
+    for (j in 1:k) {
+      sigmaV[, , j] <- Posdef(r)
+    }
+
+    try(while (check < 1) {
+      contatore <- contatore + 1
+
+      # M-STEP
+
+      if (k == 1) {
+        prior <- 1
+      } else {
+        prior <- colMeans(z[, , l])
+      }
+
+      ##### Parameters related to Y|X=x ####
+
+      # Coefficient Matrix
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          bt1[, , i] <- z[i, j, l] * Y[, , i] %*% tcrossprod(solve(sigmaV[, , j]), X1[, , i])
+          bt2[, , i] <- z[i, j, l] * X1[, , i] %*% tcrossprod(solve(sigmaV[, , j]), X1[, , i])
+        }
+
+        coeff[, , j] <- rowSums(bt1, dims = 2) %*% solve(rowSums(bt2, dims = 2))
+      }
+
+      # ROWS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWR[, , i] <- z[i, j, l] * (Y[, , i] - (coeff[, , j] %*% X1[, , i])) %*% solve(sigmaV[, , j]) %*% t(Y[, , i] - (coeff[, , j] %*% X1[, , i]))
+        }
+
+        WR[, , j] <- rowSums(tempWR, dims = 2)
+      } # Aggiornamento WR
+
+      for (j in 1:k) {
+        sigmaU[, , j] <- WR[, , j] / (r * sum(z[, j, l]))
+      }
+
+      # COLUMNS COVARIANCE MATRIX
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          tempWC[, , i] <- z[i, j, l] * t(Y[, , i] - (coeff[, , j] %*% X1[, , i])) %*% solve(sigmaU[, , j]) %*% (Y[, , i] - (coeff[, , j] %*% X1[, , i]))
+        }
+
+        WC[, , j] <- rowSums(tempWC, dims = 2)
+      } # Aggiornamento WC
+
+      for (j in 1:k) {
+        sigmaV[, , j] <- WC[, , j] / (p * sum(z[, j, l]))
+      }
+
+      # Densità
+
+      for (j in 1:k) {
+        for (i in 1:num) {
+          dens[i, j] <- dMatNorm(A = Y[, , i], M = coeff[, , j] %*% X1[, , i], U = sigmaU[, , j], V = sigmaV[, , j])
+        }
+      }
+
+      # mixture density
+
+      numerator <- matrix(rep(prior, num), num, k, byrow = TRUE) * dens
+      mixt.dens <- rowSums(numerator)
+      loglik.new <- sum(log(mixt.dens))
+      ll <- c(ll, loglik.new)
+
+      # stopping rule
+
+      if ((loglik.new - loglik.old) < tol) {
+        check <- 1
+      }
+
+      if (contatore == (maxit + 1)) {
+        check <- 1
+        print("Warning: Maxit reached")
+      }
+
+      if (loglik.new < loglik.old) {
+        mark <- 1 ## Bad situation
+      } else {
+        mark <- 0
+      } ## Good situation
+
+
+      loglik.old <- loglik.new
+
+      # E-STEP
+
+      z[, , l] <- numerator / mixt.dens
+    })
+
+    list(prior, coeff, sigmaU, sigmaV, loglik.new, z, ll, mark, check)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  #### Output ####
+
+  a <- numeric(nstart)
+  marks <- numeric(nstart)
+  checks <- numeric(nstart)
+
+  for (j in 1:nstart) {
+    a[j] <- oper[[5]][[j]]
+    marks[j] <- oper[[8]][[j]]
+    checks[j] <- oper[[9]][[j]]
+
+    if (marks[j] == 1 | is.na(marks[j]) | checks[j] == 0) {
+      a[j] <- NA
+    }
+  }
+
+  a <- which.max(a)
+  if (length(a) == 0) {
+    a <- NA
+    print("Warning: Bad random initializations. None used.")
+  }
+
+  if (is.na(a)) {
+    stop("EM failed to converge, probably because of a bad initialization")
+  }
+
+  prior <- oper[[1]][[a]]
+  coeff <- oper[[2]][[a]]
+  sigmaU <- oper[[3]][[a]]
+  sigmaV <- oper[[4]][[a]]
+  loglik.new <- oper[[5]][[a]]
+  z <- oper[[6]][[a]][, , a]
+  ll <- oper[[7]][[a]]
+  mark <- oper[[8]][[a]]
+  check <- oper[[9]][[a]]
+
+  if (k == 1) {
+    classification <- rep(1, num)
+  } else {
+    colnames(z) <- c(1:k)
+    classification <- as.numeric(colnames(z)[max.col(z, ties.method = "first")])
+  }
+
+  # Number of parameters
+
+  npar <- ((p * q) + (p * (p + 1) / 2) + (r * (r + 1) / 2) - 1) * k + (k - 1)
+
+  # Information Criteria
+
+  BIC <- -2 * loglik.new + npar * log(num) # to be minimized
+
+  return(list(prior = prior, coeff = coeff, sigmaU = sigmaU, sigmaV = sigmaV, classification = classification, loglik = loglik.new, mark = mark, check = check, npar = npar, BIC = BIC))
+}
 
