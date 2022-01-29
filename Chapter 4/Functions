@@ -1,1 +1,1105 @@
+library(foreach)
+library(doSNOW)
+library(tcltk)
+
+##############################################
+## Mode-parametrized LogNormal Distribution ##
+##############################################
+
+dlogn <- function(x, theta, gamma, log = FALSE) {
+  return(
+    dlnorm(x, meanlog = log(theta) + gamma, sdlog = sqrt(gamma), log = log)
+  )
+}
+
+plogn <- function(q, theta, gamma, lower.tail = TRUE, log.p = FALSE) {
+  return(
+    plnorm(q, meanlog = log(theta) + gamma, sdlog = sqrt(gamma), lower.tail = lower.tail, log.p = log.p)
+  )
+}
+
+qlogn <- function(p, theta, gamma, lower.tail = TRUE, log.p = FALSE) {
+  return(
+    qlnorm(p, meanlog = log(theta) + gamma, sdlog = sqrt(gamma), lower.tail = lower.tail, log.p = log.p)
+  )
+}
+
+rlogn <- function(n, theta, gamma) {
+  return(
+    rlnorm(n, meanlog = log(theta) + gamma, sdlog = sqrt(gamma))
+  )
+}
+
+##########################################
+## Mode-parametrized Gamma Distribution ##
+##########################################
+
+dgam <- function(x, theta, gamma, log = FALSE) {
+  return(
+    dgamma(x, shape = theta / gamma + 1, scale = gamma, log = log)
+  )
+}
+
+pgam <- function(q, theta, gamma, lower.tail = TRUE, log.p = FALSE) {
+  return(
+    pgamma(q, shape = theta / gamma + 1, scale = gamma, lower.tail = lower.tail, log.p = log.p)
+  )
+}
+
+qgam <- function(p, theta, gamma, lower.tail = TRUE, log.p = FALSE) {
+  return(
+    qgamma(p, shape = theta / gamma + 1, scale = gamma, lower.tail = lower.tail, log.p = log.p)
+  )
+}
+
+rgam <- function(n, theta, gamma) {
+  return(
+    rgamma(n, shape = theta / gamma + 1, scale = gamma)
+  )
+}
+
+######################################
+## Proposta: Compund G, LN  ##########
+######################################
+
+dnoi <- function(x, theta, gamma, alpha, eta, density) {
+  if (density == "cgam") {
+    dens <- alpha * dgam(x, theta = theta, gamma = gamma, log = FALSE) + (1 - alpha) * dgam(x, theta = theta, gamma = eta * gamma, log = FALSE)
+  }
+  if (density == "clogn") {
+    dens <- alpha * dlogn(x = x, theta = theta, gamma = gamma, log = FALSE) + (1 - alpha) * dlogn(x = x, theta = theta, gamma = eta * gamma, log = FALSE)
+  }
+
+  return(dens)
+}
+
+pnoi <- function(q, theta, gamma, alpha, eta, density) {
+  ploum <- function(y) dnoi(y, theta, gamma, alpha, eta, density)
+  res <- sapply(q, function(i) integrate(ploum, 0, i)$value)
+
+  return(res)
+}
+
+qnoi <- function(p, theta, gamma, alpha, eta, density, repl = 1000) {
+  n <- length(p)
+  res <- numeric(n)
+
+  f <- function(par, prob) {
+    quant <- exp(par)
+    (pnoi(q = quant, theta = theta, gamma = gamma, alpha = alpha, eta = eta, density = density) - prob)^2
+  }
+
+  temp <- rnoi(n = repl, theta = theta, gamma = gamma, alpha = alpha, eta = eta, density = density)
+  for (i in 1:n) {
+    res[i] <- suppressWarnings(exp(optim(par = log(quantile(temp, probs = p[i])), fn = f, prob = p[i], method = "Nelder-Mead")$par))
+  }
+
+  return(res)
+}
+
+rnoi <- function(n, theta, gamma, alpha, eta, density) {
+  ngood <- rbinom(n = 1, size = n, p = alpha)
+  nbad <- n - ngood
+  if (density == "cgam") {
+    Xgood <- rgam(ngood, theta = theta, gamma = gamma)
+    Xbad <- rgam(nbad, theta = theta, gamma = eta * gamma)
+  }
+  if (density == "clogn") {
+    Xgood <- rlogn(ngood, theta = theta, gamma = gamma)
+    Xbad <- rlogn(nbad, theta = theta, gamma = eta * gamma)
+  }
+
+  return(c(Xgood, Xbad))
+}
+
+########################################################
+## Density and random generation for unweighted G, LN ##
+########################################################
+
+dref <- function(x, theta, gamma, density, log = FALSE) {
+  if (density == "logn") {
+    dens <- dlogn(x = x, theta = theta, gamma = gamma, log = log)
+  }
+  if (density == "gam") {
+    dens <- dgam(x = x, theta = theta, gamma = gamma, log = log)
+  }
+
+  return(dens)
+}
+
+pref <- function(q, theta, gamma, density) {
+  ploum <- function(y) dref(y, theta, gamma, density)
+  res <- sapply(q, function(i) integrate(ploum, 0, i)$value)
+
+  return(res)
+}
+
+qref <- function(p, theta, gamma, density, repl = 1000) {
+  n <- length(p)
+  res <- numeric(n)
+
+  f <- function(par, prob) {
+    quant <- exp(par)
+    (pref(q = quant, theta = theta, gamma = gamma, density = density) - prob)^2
+  }
+
+  temp <- rref(n = repl, theta = theta, gamma = gamma, density = density)
+  for (i in 1:n) {
+    res[i] <- suppressWarnings(exp(optim(par = log(quantile(temp, probs = p[i])), fn = f, prob = p[i], method = "Nelder-Mead")$par))
+  }
+
+  return(res)
+}
+
+rref <- function(n, theta, gamma, density) {
+  if (density == "gam") {
+    ran <- rgam(n = n, theta = theta, gamma = gamma)
+  }
+  if (density == "logn") {
+    ran <- rlogn(n = n, theta = theta, gamma = gamma)
+  }
+
+  return(ran)
+}
+
+###################
+## Observed Mode ##
+###################
+
+moda <- function(x, weights = NULL) {
+  n <- length(x)
+
+  if (is.null(weights)) {
+    weights <- rep(1, n) / n
+  }
+  if (sum(weights) != 1) {
+    weights <- weights / sum(weights)
+  }
+
+  d <- density(x, weights = weights)
+  d$x[which.max(d$y)]
+}
+
+#######################
+## Weighted Variance ##
+#######################
+
+weighted.var <- function(x, w, na.rm = FALSE) {
+  if (na.rm) {
+    w <- w[i <- !is.na(x)]
+    x <- x[i]
+  }
+  sum.w <- sum(w)
+  (sum(w * x^2) * sum.w - sum(w * x)^2) / (sum.w^2 - sum(w^2))
+}
+
+#####################################
+## Initialization for maximization ##
+#####################################
+
+initial <- function(X, weights = NULL, density) {
+  n <- length(X)
+
+  if (is.null(weights)) {
+    weights <- rep(1, n)
+  }
+
+  theta <- moda(x = X, weights = weights)
+
+  mu <- weighted.mean(x = X, w = weights)
+  sigma2 <- weighted.var(x = X, w = weights)
+
+  if (density == "gam" | density == "cgam") {
+    gamma <- (-theta + sqrt(theta^2 + 4 * sigma2)) / 2
+  }
+  if (density == "logn" | density == "clogn") {
+    gamma <- 2 / 3 * log(mu / theta)
+  }
+
+  return(list(theta = theta, gamma = gamma))
+}
+
+############################################
+## Maximum Weighted Likelihood estimation ##
+############################################
+
+# ML for gam, logn
+
+wMLref <- function(X, wi = NULL, density, method = "BFGS", startpar = NULL, maxit = 1000, reltol = 1e-15, trace = 0, eps = 0.001, tol = 1e-20) {
+  n <- length(X)
+  if (is.null(wi)) {
+    wi <- rep(1, n)
+  }
+
+  # number of parameters
+
+  npar <- 2
+
+  # initialization
+
+  if (is.null(startpar)) {
+    temp <- initial(X = X, weights = wi, density = density)
+    startpar[1] <- temp$theta
+    startpar[2] <- temp$gamma
+  }
+
+  # initial values transformation
+
+  initial.values <- numeric(npar)
+  initial.values[1] <- log(max(startpar[1], eps)) # max() to avoid initial numbers <= 0
+  initial.values[2] <- log(max(startpar[2], eps)) # max() to avoid initial numbers <= 0
+
+  # Pseudo log-likelihood (to be maximized)
+
+  f <- function(par, X, wi, density) {
+    theta <- exp(par[1])
+    gamma <- exp(par[2])
+
+    # ---------------------- #
+    # weighted loglikelihood #
+    # ---------------------- #
+
+    pll <- sum(wi * dref(x = X, theta = theta, gamma = gamma, density = density, log = TRUE))
+
+    return(pll)
+  }
+
+  res <- optim(par = initial.values, fn = f, X = X, wi = wi, density = density, method = method, control = list(maxit = maxit, reltol = reltol, trace = trace, fnscale = -1))
+
+  pseudologlik <- res$value
+  est <- res$par
+
+  theta <- exp(est[1])
+  gamma <- exp(est[2])
+
+  BIC <- 2 * pseudologlik - npar * log(n)
+
+  return(
+    list(
+      npar = npar,
+      theta = theta,
+      gamma = gamma,
+      pseudologlik = pseudologlik,
+      BIC = BIC
+    )
+  )
+}
+
+# ML for cgam, clogn
+
+wML <- function(X, wi = NULL, density, method = "BFGS", startpar = NULL, maxit = 1000, reltol = 1e-15, trace = 0, eps = 0.001, tol = 1e-20) {
+  n <- length(X)
+  if (is.null(wi)) {
+    wi <- rep(1, n)
+  }
+
+  # number of parameters
+
+  if (density == "gam" | density == "logn") {
+    npar <- 2
+  }
+  if (density == "cgam" | density == "clogn") {
+    npar <- 4
+  }
+
+  # initialization
+
+  if (is.null(startpar)) {
+    temp <- initial(X = X, weights = wi, density = density)
+    startpar[1] <- temp$theta
+    startpar[2] <- temp$gamma
+    if (density == "cgam" | density == "clogn") {
+      startpar[3] <- 0.99
+      startpar[4] <- 1.01
+    }
+  }
+
+  # initial values transformation
+
+  initial.values <- numeric(npar)
+  initial.values[1] <- log(max(startpar[1], eps)) # max() to avoid initial numbers <= 0
+  initial.values[2] <- log(max(startpar[2], eps)) # max() to avoid initial numbers <= 0
+  if (density == "cgam" | density == "clogn") {
+    prob <- (startpar[3] - 0.5) / (1 - 0.5) # related to alpha
+
+    initial.values[3] <- log(prob / (1 - prob))
+    initial.values[4] <- log(startpar[4] - 1)
+  }
+
+  # Pseudo log-likelihood (to be maximized)
+
+  f <- function(par, X, wi, density) {
+    theta <- exp(par[1])
+    gamma <- exp(par[2])
+    if (density == "cgam" | density == "clogn") {
+      alpha <- (0.5 + exp(par[3])) / (1 + exp(par[3]))
+      eta <- exp(par[4]) + 1
+    }
+
+    # ---------------------- #
+    # weighted loglikelihood #
+    # ---------------------- #
+
+    if (density == "gam" | density == "logn") {
+      pll <- sum(wi * dref(x = X, theta = theta, gamma = gamma, density = density, log = TRUE))
+    }
+    if (density == "cgam" | density == "clogn") {
+      pll <- sum(wi * log(dnoi(x = X, theta = theta, gamma = gamma, alpha = alpha, eta = eta, density = density)))
+    }
+
+    return(pll)
+  }
+
+  res <- optim(par = initial.values, fn = f, X = X, wi = wi, density = density, method = method, control = list(maxit = maxit, reltol = reltol, trace = trace, fnscale = -1))
+
+  pseudologlik <- res$value
+  est <- res$par
+
+  theta <- exp(est[1])
+  gamma <- exp(est[2])
+  alpha <- NULL
+  eta <- NULL
+  if (density == "cgam" | density == "clogn") {
+    alpha <- (0.5 + exp(est[3])) / (1 + exp(est[3]))
+    eta <- exp(est[4]) + 1
+  }
+
+  BIC <- 2 * pseudologlik - npar * log(n)
+
+  return(
+    list(
+      npar = npar,
+      theta = theta,
+      gamma = gamma,
+      alpha = alpha,
+      eta = eta,
+      pseudologlik = pseudologlik,
+      BIC = BIC
+    )
+  )
+}
+
+########################
+## Value at Risk: VaR ##
+########################
+
+VaRfun <- function(p = c(0.90, 0.95, 0.99), density, theta, gamma, alpha, eta, repl = 1000) {
+  if (density == "gam" | density == "logn") {
+    VaR <- qref(p = p, theta = theta, gamma = gamma, density = density, repl = repl)
+  }
+  if (density == "cgam" | density == "clogn") {
+    VaR <- qnoi(p = p, theta = theta, gamma = gamma, alpha = alpha, eta = eta, density = density, repl = repl)
+  }
+
+  TVaR <- CTEfun(VaR = VaR, theta = theta, gamma = gamma, alpha = alpha, eta = eta, density = density)
+
+  return(list(VaR = VaR, TVaR = TVaR))
+}
+
+##############################
+## Tail Value at Risk: TVaR ##
+##############################
+
+CTEfun <- function(VaR, theta, gamma, alpha, eta, density) {
+  if (density == "gam" | density == "logn") {
+    integrand <- function(y, c) y * dref(y, theta, gamma, density) / (1 - pref(c, theta, gamma, density))
+  }
+  if (density == "cgam" | density == "clogn") {
+    integrand <- function(y, c) y * dnoi(y, theta, gamma, alpha, eta, density) / (1 - pnoi(c, theta, gamma, alpha, eta, density))
+  }
+  res <- sapply(VaR, function(i) integrate(integrand, i, Inf, c = i)$value)
+
+  return(res)
+}
+
+##################################
+#### Double Bootstrap LR test ####
+##################################
+
+Bootstrap.LR <- function(data, B1 = 3, B2 = 2, alpha = 0.05, dist.H0 = "gam", dist.H1 = "cgam", nThreads = 4) {
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+
+  fit.data <- wMLref(X = data, wi = NULL, density = dist.H0, trace = 0)
+  fit.data.c <- wML(X = data, wi = NULL, density = dist.H1, trace = 0)
+
+  # Step-1
+
+  lr.data <- 2 * (fit.data.c$pseudologlik - fit.data$pseudologlik)
+
+  # Step-2
+
+  samp <- matrix(0, nrow = length(data), ncol = B1)
+  bt.fit.data <- vector(mode = "list", length = B1)
+  bt.fit.data.c <- vector(mode = "list", length = B1)
+  bt.lr.data <- numeric(length = B1)
+  bt.lr.data2 <- matrix(0, nrow = B2, ncol = B1)
+  count.pval <- numeric(length = B1)
+  count.pval.2 <- matrix(0, nrow = B2, ncol = B1)
+  count.pval.final <- numeric(length = B1)
+
+  pb <- tkProgressBar(title = "Progress bar", min = 0, max = B1, width = 300)
+
+  for (i in 1:B1) {
+    setTkProgressBar(pb, i, label = paste(round(i / B1 * 100, 0), "% done"))
+
+    if (dist.H0 == "gam") {
+      samp[, i] <- rgam(length(data), theta = fit.data[["theta"]], gamma = fit.data[["gamma"]])
+    } else if (dist.H0 == "logn") {
+      samp[, i] <- rlogn(length(data), theta = fit.data[["theta"]], gamma = fit.data[["gamma"]])
+    }
+
+    bt.fit.data[[i]] <- wMLref(X = samp[, i], wi = NULL, density = dist.H0, trace = 0)
+    bt.fit.data.c[[i]] <- wML(X = samp[, i], wi = NULL, density = dist.H1, trace = 0)
+    bt.lr.data[i] <- 2 * (bt.fit.data.c[[i]][["pseudologlik"]] - bt.fit.data[[i]][["pseudologlik"]])
+    if (bt.lr.data[i] > lr.data) {
+      count.pval[i] <- 1
+    } else {
+      count.pval[i] <- 0
+    }
+
+    cluster <- makeCluster(nThreads, type = "SOCK")
+    registerDoSNOW(cluster)
+
+    oper <- foreach(j = 1:B2, .combine = "comb", .export = c("wMLref", "wML", "initial", "moda", "weighted.var", "dref", "dlogn", "dgam", "dnoi", "rgam", "rlogn"), .multicombine = TRUE, .init = list(list())) %dopar% {
+      if (dist.H0 == "gam") {
+        samp2 <- rgam(length(samp[, i]), theta = bt.fit.data[[i]][["theta"]], gamma = bt.fit.data[[i]][["gamma"]])
+      } else if (dist.H0 == "logn") {
+        samp2 <- rlogn(length(samp[, i]), theta = bt.fit.data[[i]][["theta"]], gamma = bt.fit.data[[i]][["gamma"]])
+      }
+
+      bt.fit.data2 <- wMLref(X = samp2, wi = NULL, density = dist.H0, trace = 0)
+      bt.fit.data.c2 <- wML(X = samp2, wi = NULL, density = dist.H1, trace = 0)
+      cont <- 2 * (bt.fit.data.c2[["pseudologlik"]] - bt.fit.data2[["pseudologlik"]])
+
+      list(cont)
+    }
+
+    stopCluster(cluster)
+    registerDoSEQ()
+
+    for (o in 1:B2) {
+      bt.lr.data2[o, i] <- oper[[1]][[o]]
+      if (bt.lr.data2[o, i] > bt.lr.data[i]) {
+        count.pval.2[o, i] <- 1
+      } else {
+        count.pval.2[o, i] <- 0
+      }
+    }
+  }
+
+  close(pb)
+
+  pval.B1 <- sum(count.pval) / B1
+
+  pval.B2 <- colSums(count.pval.2) / B2
+
+  for (i in B1) {
+    if (pval.B2[i] < pval.B1) {
+      count.pval.final[i] <- 1
+    } else {
+      count.pval.final[i] <- 0
+    }
+  }
+
+  pval.final <- sum(count.pval.final) / B1
+
+  if (pval.final < alpha) {
+    print("Reject H0")
+  } else {
+    print("Don't reject H0")
+  }
+
+  return(pvalue = pval.final)
+}
+
+##########################################
+#### Double Bootstrap Mean of Order p ####
+##########################################
+
+Bootstrap.MoP <- function(data, q.set = seq(from = 0.05, to = 0.95, by = 0.1), n1.set = seq(from = 0.925, to = 0.995, by = 0.01), B = 250, nThreads = NULL) {
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+  helphill <- function(Data, k, j) {
+    xstat <- sort(Data, decreasing = TRUE)
+    xstat[xstat == 0] <- 0.001
+    xihat <- mean((log(xstat[1:k]) - log(xstat[k + 1]))^j)
+    xihat
+  }
+  DAMSE <- function(Data) {
+    n <- length(Data)
+    k <- c(floor(n^0.995), floor(n^0.999))
+    M11 <- helphill(Data, k[1], 1)
+    M12 <- helphill(Data, k[1], 2)
+    M13 <- helphill(Data, k[1], 3)
+    M21 <- helphill(Data, k[2], 1)
+    M22 <- helphill(Data, k[2], 2)
+    M23 <- helphill(Data, k[2], 3)
+    W.k1.t1 <- (M11 - sqrt(M12 / 2)) / (sqrt(M12 / 2) - (M13 / 6)^(1 / 3))
+    W.k2.t1 <- (M21 - sqrt(M22 / 2)) / (sqrt(M22 / 2) - (M23 / 6)^(1 / 3))
+    rho.k1.t1 <- -abs(3 * (W.k1.t1 - 1) / (W.k1.t1 - 3))
+    rho.k2.t1 <- -abs(3 * (W.k2.t1 - 1) / (W.k2.t1 - 3))
+    W.k1.t0 <- (log(M11) - 0.5 * log(M12 / 2)) / (0.5 * log(M12 / 2) -
+      log(M13 / 6) / 3)
+    W.k2.t0 <- (log(M21) - 0.5 * log(M22 / 2)) / (0.5 * log(M22 / 2) -
+      log(M23 / 6) / 3)
+    rho.k1.t0 <- -abs(3 * (W.k1.t0 - 1) / (W.k1.t0 - 3))
+    rho.k2.t0 <- -abs(3 * (W.k2.t0 - 1) / (W.k2.t0 - 3))
+    chi.t1 <- median(c(rho.k1.t1, rho.k2.t1))
+    chi.t0 <- median(c(rho.k1.t0, rho.k2.t0))
+    I.t1 <- c((rho.k1.t1 - chi.t1)^2, (rho.k2.t1 - chi.t1)^2)
+    I.t0 <- c((rho.k1.t0 - chi.t0)^2, (rho.k2.t0 - chi.t0)^2)
+    if (sum(I.t0) <= sum(I.t1)) {
+      tau <- 0
+      rho <- rho.k2.t0
+      # print("tau is equal to 0")
+    }
+    else {
+      tau <- 1
+      rho <- rho.k2.t1
+      # print("tau is equal to 1")
+    }
+    U <- c()
+    xstat <- sort(Data, decreasing = TRUE)
+    xstat[xstat == 0] <- 0.001
+    for (i in 1:k[2]) {
+      U[i] <- i * (log(xstat[i]) - log(xstat[i + 1]))
+    }
+    i <- 1:k[2]
+    dk <- mean((i / k[2])^(-rho))
+    Dk <- function(a) {
+      D <- mean((i / k[2])^(-a) * U[i])
+    }
+    beta <- (k[2] / n)^rho * (dk * Dk(0) - Dk(rho)) / (dk * Dk(rho) -
+      Dk(2 * rho))
+    erg <- c(beta, rho)
+    erg
+  }
+
+  # Step 1 [Chapter 6, p.130]
+
+  Q1 <- q.set
+  res.k.p <- matrix(0, nrow = 3, ncol = length(Q1))
+  rownames(res.k.p) <- c("p.star", "k.star", "PORT-MOP")
+  colnames(res.k.p) <- paste("q =", as.character(Q1), sep = " ")
+  RMSE.q <- numeric(length(q.set))
+  size <- n1.set
+  Container <- vector(mode = "list", length = length(q.set))
+  MSE <- matrix(0, nrow = 9, ncol = length(size))
+  k1starp <- matrix(0, nrow = 9, ncol = length(size))
+  k2starp <- matrix(0, nrow = 9, ncol = length(size))
+
+  # Step 2 [Chapter 6, p.130] - execute for each q in Q1
+
+  for (i in 1:length(Q1)) {
+    cat("|")
+
+    # Step 2.1 [Chapter 6, p.130]
+
+    osx <- sort(data)
+    q <- Q1[i]
+    n_q <- floor(length(data) * q) + 1
+    x_n_q <- osx[n_q]
+    n_new <- length(data) - n_q # new sample size
+    rosx <- rev(osx)
+    x_new <- rosx[1:n_new] - x_n_q # new sample
+
+    # Step 2 - 3 - 4 [Paper: A simple generalization of the Hill estimator]
+
+    secorder <- DAMSE(Data = x_new)
+
+    Container[[i]] <- vector(mode = "list", length = length(size))
+
+    # Step 5 [Paper]
+
+    for (s in 1:length(size)) {
+      n1 <- floor(n_new^size[s])
+      n2 <- floor((n1)^(2) / n_new) + 1
+
+      cat("*")
+
+      # Step 6 - 7 - 8 - 9 - 10 [Paper]
+
+      khelp1 <- 2:(n1 - 1)
+      khelp2 <- 2:(n2 - 1)
+
+      # tn1(tn2) has B rows and n1-2(n2-2) columns related to the varying k of khelp1(khelp2)
+
+      tn1 <- matrix(0, nrow = B, ncol = c(n1 - 2))
+      tn2 <- matrix(0, nrow = B, ncol = c(n2 - 2))
+
+      tn1.t <- numeric(length = c(n1 - 2))
+      tn2.t <- numeric(length = c(n2 - 2))
+
+      cluster <- makeCluster(nThreads, type = "SOCK")
+      registerDoSNOW(cluster)
+
+      check <- 0
+
+      while (check < 1) {
+        oper <- foreach(l = 1:B, .combine = "comb", .multicombine = TRUE, .init = list(list(), list())) %dopar% {
+          x2 <- sample(x_new, n2, replace = TRUE)
+          x1 <- c(x2, sample(x_new, (n1 - n2), replace = TRUE))
+
+          for (i1 in c(2:(n1 - 1))) {
+            tn1.t[i1 - 1] <- (helphill(Data = x1, k = floor(i1 / 2), j = 1) - helphill(Data = x1, k = i1, j = 1))^2
+          }
+
+          for (i2 in c(2:(n2 - 1))) {
+            tn2.t[i2 - 1] <- (helphill(Data = x2, k = floor(i2 / 2), j = 1) - helphill(Data = x2, k = i2, j = 1))^2
+          }
+
+          list(tn1.t, tn2.t)
+        }
+
+        for (o in 1:B) {
+          tn1[o, ] <- oper[[1]][[o]]
+          tn2[o, ] <- oper[[2]][[o]]
+        }
+
+        tn1star <- colMeans(tn1)
+        tn2star <- colMeans(tn2)
+        k1star <- which.min(tn1star) + 1
+        k2star <- which.min(tn2star) + 1
+
+        if (k2star <= k1star) {
+          check <- 1
+        }
+      }
+
+      stopCluster(cluster)
+      registerDoSEQ()
+
+      rho <- secorder[2]
+      Exp <- 2 / (1 - 2 * rho)
+      k0star <- min(n_new - 1, floor((1 - 2^rho)^(Exp) * ((k1star^2) / k2star)) + 1)
+
+      H0_star <- helphill(Data = x_new, k = k0star, j = 1)
+
+      temp_p <- c(1:9) / (20 * H0_star)
+
+      Container[[i]][[s]] <- vector(mode = "list", length = 2)
+
+      tn1p <- array(0, dim = c(B, c(n1 - 2), length(temp_p)))
+      tn2p <- array(0, dim = c(B, c(n2 - 2), length(temp_p)))
+
+      tn1p.t <- numeric(length = c(n1 - 2))
+      tn2p.t <- numeric(length = c(n2 - 2))
+
+      tn1starp <- matrix(0, nrow = length(temp_p), ncol = c(n1 - 2))
+      tn2starp <- matrix(0, nrow = length(temp_p), ncol = c(n2 - 2))
+
+      cluster <- makeCluster(nThreads, type = "SOCK")
+      registerDoSNOW(cluster)
+
+      controlp <- 0
+      Hp_star <- numeric(length(temp_p))
+
+      while (controlp < 1) {
+        for (p in 1:length(temp_p)) {
+          check <- 0
+
+          while (check < 1) {
+            oper2 <- foreach(l = 1:B, .packages = c("evt0"), .combine = "comb", .multicombine = TRUE, .init = list(list(), list())) %dopar% {
+              x2p <- sample(x_new, n2, replace = TRUE)
+              x1p <- c(x2p, sample(x_new, (n1 - n2), replace = TRUE))
+
+              for (i1 in c(2:(n1 - 1))) {
+                tn1p.t[i1 - 1] <- as.numeric(unlist(mop(x = x1p, k = floor(i1 / 2), p = temp_p[p], method = "MOP"))) - as.numeric(unlist(mop(x = x1p, k = i1, p = temp_p[p], method = "MOP")))
+              }
+
+              for (i2 in c(2:(n2 - 1))) {
+                tn2p.t[i2 - 1] <- as.numeric(unlist(mop(x = x2p, k = floor(i2 / 2), p = temp_p[p], method = "MOP"))) - as.numeric(unlist(mop(x = x2p, k = i2, p = temp_p[p], method = "MOP")))
+              }
+
+              list(tn1p.t, tn2p.t)
+            }
+
+            for (o in 1:B) {
+              tn1p[o, , p] <- oper2[[1]][[o]]
+              tn2p[o, , p] <- oper2[[2]][[o]]
+            }
+
+            tn1starp[p, ] <- colMeans(tn1p[, , p])
+            tn2starp[p, ] <- colMeans(tn2p[, , p])
+
+            k1starp[p, s] <- which.min(colMeans(tn1p[, , p]^2)) + 1
+            k2starp[p, s] <- which.min(colMeans(tn2p[, , p]^2)) + 1
+
+            if (k2starp[p, s] <= k1starp[p, s]) {
+              check <- 1
+            }
+          }
+
+          # Step 12 [Paper]
+
+          k0starp <- min(n_new - 1, floor((1 - 2^rho)^(Exp) * ((k1starp[p, s]^2) / k2starp[p, s])) + 1)
+
+          Hp_star[p] <- as.numeric(unlist(mop(x = x_new, k = k0starp, p = temp_p[p], method = "MOP")))
+
+          den <- 1 - 2 * temp_p[p] * Hp_star[p]
+          if (den < 0) {
+            den <- 0.01
+          } # do not worry. This solution will be discarded and the algorithm will restart.
+
+          sigmap <- (Hp_star[p] * (1 - temp_p[p] * Hp_star[p])) / (sqrt(den))
+
+          MSE[p, s] <- ((sigmap)^(2) / (k0starp)) + ((Hp_star[p] * secorder[1] * (1 - temp_p[p] * Hp_star[p]) * (n_new / k0starp)^secorder[2]) / (1 - temp_p[p] * Hp_star[p] - secorder[2]))^2
+        }
+
+        if (any(temp_p < c(1 / (2 * Hp_star)))) {
+          controlp <- 1
+        } else {
+          temp_p <- temp_p / 2
+          print("resetting p")
+        }
+      }
+
+      stopCluster(cluster)
+      registerDoSEQ()
+
+      Container[[i]][[s]][[1]] <- tn1starp
+      Container[[i]][[s]][[2]] <- tn2starp
+    }
+
+    # Step 14 [Paper]
+
+    chi.p <- numeric(length = length(temp_p))
+
+    for (c in 1:length(chi.p)) {
+      chi.p[c] <- median(na.omit(MSE[c, ]))
+    }
+
+    pp <- which.min(chi.p)
+    p.star <- temp_p[pp]
+
+    # Step 15 [Paper]
+
+    n1.star <- size[which.min(na.omit(MSE[pp, ]))]
+
+    # Step 16 [Paper]
+
+    ss <- which(size == n1.star)
+    k.star <- min(n_new - 1, floor((1 - 2^rho)^(Exp) * ((k1starp[pp, ss])^2 / (k2starp[pp, ss]))) + 1)
+
+    res.k.p[1, i] <- p.star
+    res.k.p[2, i] <- k.star
+    res.k.p[3, i] <- as.numeric(unlist(mop(x_new, k = k.star, p = p.star, method = "MOP")))
+
+    # Step 3 [Chapter 6, p.130]
+
+    RMSE.q[i] <- sqrt(((res.k.p[3, i]^2) / res.k.p[2, i]) + ((Container[[i]][[ss]][[1]][pp, res.k.p[2, i] - 1])^2 / ((2 * rho - 1) * Container[[i]][[ss]][[2]][pp, res.k.p[2, i] - 1]))^2)
+  }
+
+  # Step 4 [Chapter 6, p.130]
+
+  q.select <- which.min(na.omit(RMSE.q))
+
+  p.star.f <- res.k.p[1, q.select]
+  k.star.f <- res.k.p[2, q.select]
+  q.star.f <- Q1[which.min(na.omit(RMSE.q))]
+
+  # Step 5 [Chapter 6, p.130]
+
+  osx <- sort(data)
+  q <- q.star.f
+  n_q <- floor(length(data) * q) + 1
+  x_n_q <- osx[n_q]
+  n_new <- length(data) - n_q # new sample size
+  rosx <- rev(osx)
+  x_new <- rosx[1:n_new] - x_n_q # new sample
+
+  est <- as.numeric(unlist(mop(x_new, k = k.star.f, p = p.star.f, method = "MOP")))
+
+  return(list(p = p.star.f, q = q.star.f, k = k.star.f, MOP = est, RMSE.q = RMSE.q, res.k.p = res.k.p))
+}
+
+########################
+#### Pareto t-score ####
+########################
+
+par.t <- function(lambda, data) {
+  (1 / length(data)) * sum((lambda * ((sum(1 / (data + lambda))) / (sum(data / (data + lambda)))))^2 * ((data^2) / (data + lambda)^2) + ((lambda^2) / (data + lambda)^2) - 2 * lambda * ((sum(1 / (data + lambda))) / (sum(data / (data + lambda)))) * lambda * (data / (data + lambda)^2)) - ((lambda * ((sum(1 / (data + lambda))) / (sum(data / (data + lambda))))) / (lambda * ((sum(1 / (data + lambda))) / (sum(data / (data + lambda)))) + 2))
+}
+
+#######################################
+#### Simulation study DGP function ####
+#######################################
+
+SimGen <- function(n = 1000, nsims = 10000, theta, gamma, gamma.mix = NULL, pi, eta, den.core, den.cont, nThreads = 8) {
+  comb <- function(x, ...) {
+    lapply(
+      seq_along(x),
+      function(i) c(x[[i]], lapply(list(...), function(y) y[[i]]))
+    )
+  }
+
+  res.theta.core <- numeric(length = nsims)
+  res.gamma.core <- numeric(length = nsims)
+
+  res.theta.cont <- numeric(length = nsims)
+  res.gamma.cont <- numeric(length = nsims)
+  res.alpha.cont <- numeric(length = nsims)
+  res.eta.cont <- numeric(length = nsims)
+
+  res.Var95.real <- numeric(length = nsims)
+  res.Var99.real <- numeric(length = nsims)
+  res.TVar95.real <- numeric(length = nsims)
+  res.TVar99.real <- numeric(length = nsims)
+
+  res.Var95.core <- numeric(length = nsims)
+  res.Var99.core <- numeric(length = nsims)
+  res.TVar95.core <- numeric(length = nsims)
+  res.TVar99.core <- numeric(length = nsims)
+
+  res.Var95.cont <- numeric(length = nsims)
+  res.Var99.cont <- numeric(length = nsims)
+  res.TVar95.cont <- numeric(length = nsims)
+  res.TVar99.cont <- numeric(length = nsims)
+
+  cluster <- makeCluster(nThreads, type = "SOCK")
+  registerDoSNOW(cluster)
+
+  pb <- txtProgressBar(max = nsims, style = 3)
+  progress <- function(n) setTxtProgressBar(pb, n)
+  opts <- list(progress = progress)
+
+  oper <- foreach(i = 1:nsims, .combine = "comb", .export = c("dlogn", "plogn", "qlogn", "rlogn", "dgam", "pgam", "qgam", "rgam", "dnoi", "pnoi", "qnoi", "rnoi", "dref", "pref", "qref", "rref", "moda", "weighted.var", "initial", "wMLref", "wML", "VaRfun", "CTEfun"), .multicombine = TRUE, .init = list(list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list(), list()), .options.snow = opts) %dopar% {
+    fit.core <- NULL
+    fit.cont <- NULL
+    attempt <- 0
+
+    while (attempt < 1) {
+      if (den.core == "gam" & den.cont == "gam") {
+        daticore <- c(rgam(c(pi * n), theta = theta, gamma = gamma))
+        daticont <- c(rgam(c((1 - pi) * n), theta = theta, gamma = gamma * eta))
+      } else if (den.core == "logn" & den.cont == "logn") {
+        daticore <- c(rlogn(c(pi * n), theta = theta, gamma = gamma))
+        daticont <- c(rlogn(c((1 - pi) * n), theta = theta, gamma = gamma * eta))
+      } else if (den.core == "gam" & den.cont == "logn") {
+        daticore <- c(rgam(c(pi * n), theta = theta, gamma = gamma))
+        daticont <- c(rlogn(c((1 - pi) * n), theta = theta, gamma = gamma.mix * eta))
+      } else if (den.core == "logn" & den.cont == "gam") {
+        daticore <- c(rlogn(c(pi * n), theta = theta, gamma = gamma))
+        daticont <- c(rgam(c((1 - pi) * n), theta = theta, gamma = gamma.mix * eta))
+      }
+
+      dati <- c(daticore, daticont)
+
+      tryCatch(fit.core <- wMLref(X = dati, wi = NULL, density = den.core, trace = 0), error = function(e) {
+        NULL
+      })
+
+      if (den.core == "gam") {
+        tryCatch(fit.cont <- wML(X = dati, wi = NULL, density = "cgam", trace = 0), error = function(e) {
+          NULL
+        })
+      } else {
+        tryCatch(fit.cont <- wML(X = dati, wi = NULL, density = "clogn", trace = 0), error = function(e) {
+          NULL
+        })
+      }
+
+      # -- True Var
+
+      Real.VaR <- NULL
+      Real.TVaR <- NULL
+
+      sj <- 1
+      for (alpha in c(0.95, 0.99)) {
+        Real.VaR[sj] <- quantile(dati, alpha)
+        Real.TVaR[sj] <- mean(dati[dati >= quantile(dati, alpha)])
+        sj <- sj + 1
+      }
+
+      risks.core <- tryCatch(VaRfun(p = c(0.95, 0.99), den.core, fit.core$theta, fit.core$gamma), error = function(e) {
+        NULL
+      })
+
+      if (den.core == "gam") {
+        risks.cont <- tryCatch(VaRfun(p = c(0.95, 0.99), "cgam", fit.cont$theta, fit.cont$gamma, fit.cont$alpha, fit.cont$eta), error = function(e) {
+          NULL
+        })
+      } else {
+        risks.cont <- tryCatch(VaRfun(p = c(0.95, 0.99), "clogn", fit.cont$theta, fit.cont$gamma, fit.cont$alpha, fit.cont$eta), error = function(e) {
+          NULL
+        })
+      }
+
+      if (!is.null(fit.core) & !is.null(fit.cont) & !is.null(risks.core) & !is.null(risks.cont)) {
+        attempt <- 1
+      }
+    }
+
+    res.theta.core <- fit.core[["theta"]]
+    res.gamma.core <- fit.core[["gamma"]]
+
+    res.theta.cont <- fit.cont[["theta"]]
+    res.gamma.cont <- fit.cont[["gamma"]]
+    res.alpha.cont <- fit.cont[["alpha"]]
+    res.eta.cont <- fit.cont[["eta"]]
+
+    res.Var95.real <- Real.VaR[1]
+    res.Var99.real <- Real.VaR[2]
+    res.TVar95.real <- Real.TVaR[1]
+    res.TVar99.real <- Real.TVaR[2]
+
+    res.Var95.core <- risks.core$VaR[1]
+    res.Var99.core <- risks.core$VaR[2]
+    res.TVar95.core <- risks.core$TVaR[1]
+    res.TVar99.core <- risks.core$TVaR[2]
+
+    res.Var95.cont <- risks.cont$VaR[1]
+    res.Var99.cont <- risks.cont$VaR[2]
+    res.TVar95.cont <- risks.cont$TVaR[1]
+    res.TVar99.cont <- risks.cont$TVaR[2]
+
+    list(res.theta.core, res.gamma.core, res.theta.cont, res.gamma.cont, res.alpha.cont, res.eta.cont, res.Var95.real, res.Var99.real, res.TVar95.real, res.TVar99.real, res.Var95.core, res.Var99.core, res.TVar95.core, res.TVar99.core, res.Var95.cont, res.Var99.cont, res.TVar95.cont, res.TVar99.cont)
+  }
+
+  stopCluster(cluster)
+  registerDoSEQ()
+
+  close(pb)
+
+  for (o in 1:nsims) {
+    res.theta.core[o] <- oper[[1]][[o]]
+    res.gamma.core[o] <- oper[[2]][[o]]
+    res.theta.cont[o] <- oper[[3]][[o]]
+    res.gamma.cont[o] <- oper[[4]][[o]]
+    res.alpha.cont[o] <- oper[[5]][[o]]
+    res.eta.cont[o] <- oper[[6]][[o]]
+
+    res.Var95.real[o] <- oper[[7]][[o]]
+    res.Var99.real[o] <- oper[[8]][[o]]
+    res.TVar95.real[o] <- oper[[9]][[o]]
+    res.TVar99.real[o] <- oper[[10]][[o]]
+
+    res.Var95.core[o] <- oper[[11]][[o]]
+    res.Var99.core[o] <- oper[[12]][[o]]
+    res.TVar95.core[o] <- oper[[13]][[o]]
+    res.TVar99.core[o] <- oper[[14]][[o]]
+
+    res.Var95.cont[o] <- oper[[15]][[o]]
+    res.Var99.cont[o] <- oper[[16]][[o]]
+    res.TVar95.cont[o] <- oper[[17]][[o]]
+    res.TVar99.cont[o] <- oper[[18]][[o]]
+  }
+
+  mean.theta.core <- mean(res.theta.core)
+  sd.theta.core <- sd(res.theta.core)
+  mean.gamma.core <- mean(res.gamma.core)
+  sd.gamma.core <- sd(res.gamma.core)
+
+  mean.theta.cont <- mean(res.theta.cont)
+  sd.theta.cont <- sd(res.theta.cont)
+  mean.gamma.cont <- mean(res.gamma.cont)
+  sd.gamma.cont <- sd(res.gamma.cont)
+  mean.alpha.cont <- mean(res.alpha.cont)
+  sd.alpha.cont <- sd(res.alpha.cont)
+  mean.eta.cont <- mean(res.eta.cont)
+  sd.eta.cont <- sd(res.eta.cont)
+
+  mean.Var95.real <- mean(res.Var95.real)
+  mean.Var99.real <- mean(res.Var99.real)
+  mean.TVar95.real <- mean(res.TVar95.real)
+  mean.TVar99.real <- mean(res.TVar99.real)
+
+  mean.Var95.core <- mean(res.Var95.core)
+  mean.Var99.core <- mean(res.Var99.core)
+  mean.TVar95.core <- mean(res.TVar95.core)
+  mean.TVar99.core <- mean(res.TVar99.core)
+
+  mean.Var95.cont <- mean(res.Var95.cont)
+  mean.Var99.cont <- mean(res.Var99.cont)
+  mean.TVar95.cont <- mean(res.TVar95.cont)
+  mean.TVar99.cont <- mean(res.TVar99.cont)
+
+  sd.Var95.real <- sd(res.Var95.real)
+  sd.Var99.real <- sd(res.Var99.real)
+  sd.TVar95.real <- sd(res.TVar95.real)
+  sd.TVar99.real <- sd(res.TVar99.real)
+
+  sd.Var95.core <- sd(res.Var95.core)
+  sd.Var99.core <- sd(res.Var99.core)
+  sd.TVar95.core <- sd(res.TVar95.core)
+  sd.TVar99.core <- sd(res.TVar99.core)
+
+  sd.Var95.cont <- sd(res.Var95.cont)
+  sd.Var99.cont <- sd(res.Var99.cont)
+  sd.TVar95.cont <- sd(res.TVar95.cont)
+  sd.TVar99.cont <- sd(res.TVar99.cont)
+
+  ####
+
+  call.f <- list(theta = theta, gamma = gamma, pi = pi, eta = eta, den.core = den.core, den.cont = den.cont, n = n, nsims = nsims)
+
+  res.core <- list(
+    mean.theta.core = mean.theta.core,
+    sd.theta.core = sd.theta.core,
+    mean.gamma.core = mean.gamma.core,
+    sd.gamma.core = sd.gamma.core
+  )
+
+  res.cont <- list(
+    mean.theta.cont = mean.theta.cont,
+    sd.theta.cont = sd.theta.cont,
+    mean.gamma.cont = mean.gamma.cont,
+    sd.gamma.cont = sd.gamma.cont,
+    mean.alpha.cont = mean.alpha.cont,
+    sd.alpha.cont = sd.alpha.cont,
+    mean.eta.cont = mean.eta.cont,
+    sd.eta.cont = sd.eta.cont
+  )
+
+  res.risk.real <- list(
+    mean.Var95.real = mean.Var95.real,
+    sd.Var95.real = sd.Var95.real,
+    mean.Var99.real = mean.Var99.real,
+    sd.Var99.real = sd.Var99.real,
+    mean.TVar95.real = mean.TVar95.real,
+    sd.TVar95.real = sd.TVar95.real,
+    mean.TVar99.real = mean.TVar99.real,
+    sd.TVar99.real = sd.TVar99.real
+  )
+
+  res.risk.core <- list(
+    mean.Var95.core = mean.Var95.core,
+    sd.Var95.core = sd.Var95.core,
+    mean.Var99.core = mean.Var99.core,
+    sd.Var99.core = sd.Var99.core,
+    mean.TVar95.core = mean.TVar95.core,
+    sd.TVar95.core = sd.TVar95.core,
+    mean.TVar99.core = mean.TVar99.core,
+    sd.TVar99.core = sd.TVar99.core
+  )
+
+  res.risk.cont <- list(
+    mean.Var95.cont = mean.Var95.cont,
+    sd.Var95.cont = sd.Var95.cont,
+    mean.Var99.cont = mean.Var99.cont,
+    sd.Var99.cont = sd.Var99.cont,
+    mean.TVar95.cont = mean.TVar95.cont,
+    sd.TVar95.cont = sd.TVar95.cont,
+    mean.TVar99.cont = mean.TVar99.cont,
+    sd.TVar99.cont = sd.TVar99.cont
+  )
+
+  return(list(
+    call = call.f,
+    core = res.core,
+    cont = res.cont,
+    risk.real = res.risk.real,
+    risk.core = res.risk.core,
+    risk.cont = res.risk.cont
+  ))
+}
 
