@@ -1,1 +1,440 @@
+### Example for comparing computational times/parameter recovery of ECME and AECM algorithms of MVTIN-Ms. ####
+
+p   <-3
+r   <-4
+numT<-200
+k   <-2
+
+M     <-array(0,dim = c(p,r,k))
+M[,,1]<-matrix(c(-5,-4,-4,-3,4,4,5,5,5,6,7,6), nrow = p, ncol = r, byrow = TRUE)
+M[,,2]<-matrix(c(5,4,4,3,-5,-5,-6,-5,-2,-2,-3,-3), nrow = p, ncol = r, byrow = TRUE)
+
+U     <-array(0,dim = c(p,p,k))
+U[,,1]<-matrix(c(2,1,0.2,1,2,1,0.2,1,2), nrow = p, ncol = p, byrow = TRUE)
+U[,,2]<-matrix(c(2.5,0.2,0.2,0.2,2.5,0.2,0.2,0.2,2.5), nrow = p, ncol = p, byrow = TRUE)
+
+V     <-array(0,dim = c(r,r,k))
+V[,,1]<-matrix(c(1,0.5,0.2,0.1,0.5,1,0.5,0.2,0.2,0.5,1,0.5,0.1,0.2,0.5,1), nrow = r, ncol = r, byrow = TRUE)
+V[,,2]<-matrix(c(1.5,0.8,0.3,0.2,0.8,1.5,0.8,0.3,0.3,0.8,1.5,0.8,0.2,0.3,0.8,1.5), nrow = r, ncol = r, byrow = TRUE)
+
+prob <-c(0.35,0.65)
+theta<-c(0.75,0.75)
+
+set.seed(123)
+
+X       <- Rand.mixt(numT,M,U,V,theta,prob,"tin")
+initial <- Rand.init(X$X,k,"tin", nstartG = 10, nThreads = 10) 
+
+system.time(res_AECM<- Mix_Tin_MV(X$X,k,initial,nstartG = 10, nThreads = 10, Mstep = "AECM"))
+system.time(res_ECME<- Mix_Tin_MV(X$X,k,initial,nstartG = 10, nThreads = 10, Mstep = "ECME"))
+
+### Example for parameter recovery of MVSEN-Ms. ####
+
+# all the other parameters as above
+
+theta<-c(0.30,0.30)
+
+X       <- Rand.mixt(numT,M,U,V,theta,prob,"sen")
+initial <- Rand.init(X$X,k,"sen") 
+
+res_sen<- Mix_Sen_MV(X$X, k, initial, nstartG = 10, nThreads = 10)
+
+### Example for random noisy matrices (Scenario B. For scenario A simply change perc.noise and rad) ####
+
+library(mclust)
+
+rsphere <- function(n, r = 1.0, surface_only = FALSE, center=cbind(0.0, 0.0, 0.0)) {
+  phi       <- runif(n, 0.0, 2.0 * pi)
+  cos_theta <- runif(n, -1.0, 1.0)
+  sin_theta <- sqrt((1.0-cos_theta)*(1.0+cos_theta))
+  radius <- r
+  if (surface_only == FALSE) {
+    radius <- r * runif(n, 0.0, 1.0)^(1.0/3.0)
+  }
+  
+  x <- radius * sin_theta * cos(phi)
+  y <- radius * sin_theta * sin(phi)
+  z <- radius * cos_theta
+  
+  cbind(x+center[1], y+center[2], z+center[3])
+  
+} # generate data from a sphere
+
+resMN <- vector(mode = "list",length = 3) 
+resSEN<- vector(mode = "list",length = 3) 
+resTIN<- vector(mode = "list",length = 3) 
+resT  <- vector(mode = "list",length = 3) 
+
+p<-3
+r<-3
+numT<-200
+k   <-2
+
+M     <- array(0,dim = c(p,r,k))
+M[,,1]<- matrix(c(-3,-2,-2,-1,0,0,-2,-1,-1),nrow = p,ncol = r,byrow = TRUE)
+M[,,2]<- matrix(c(0,1,0,2,2,3,0,2,1),nrow = p,ncol = r,byrow = TRUE)
+
+U     <- array(0,dim = c(p,p,k))
+U[,,1]<- matrix(c(0.7,-0.05,-0.05,-0.05,0.7,-0.01,-0.05,-0.01,0.7),3,3)
+U[,,2]<- matrix(c(0.6,0.1,0.01,0.1,0.6,-0.05,0.01,-0.05,0.6),3,3)
+
+V     <- array(0,dim = c(r,r,k))
+V[,,1]<- matrix(c(0.6,0.1,-0.05,0.1,0.8,0.1,-0.05,0.1,0.7),3,3)
+V[,,2]<- matrix(c(0.6,-0.1,0.05,-0.1,0.9,0.01,0.05,0.01,1),3,3)
+
+prob <-c(0.5,0.5)
+
+X       <- Rand.mixt(numT,M,U,V,prob = prob, density ="norm")
+
+# Substitute % of random data 
+
+perc.noise<-0.15
+num1 <- X$group.size[1]
+num2 <- X$group.size[2]
+
+n.noise1<-round(perc.noise*num1)
+n.noise2<-round(perc.noise*num2)
+
+change1<-sort(sample(x=c(1:num1),size = n.noise1))
+change2<-sort(sample(x=c(1:num2),size = n.noise2))
+
+rad<- 4
+camb1<-numeric(n.noise1)
+camb2<-numeric(n.noise2)
+
+X1<- array(0,dim = c(p,r,num1))
+for (i in 1:num1) {
+  X1[,,i] <- X$X[,,i]
+}
+X2<- array(0,dim = c(p,r,num2))
+for (i in 1:num2) {
+  X2[,,i] <- X$X[,,(num1+i)]
+}
+
+count<-0
+for (t in change1) {
+  
+  count<-count+1
+  camb1[count]<- sample(1:3,1)
+  
+  sph1<-rsphere(1, rad, TRUE, center = M[,,1][,camb1[count]])
+  
+  X1[1,camb1[count],t] <- sph1[,1]
+  X1[2,camb1[count],t] <- sph1[,2]
+  X1[3,camb1[count],t] <- sph1[,3]
+  
+}
+
+count<-0
+for (t in change2) {
+  
+  count<-count+1
+  camb2[count]<- sample(1:3,1)
+  
+  sph2<-rsphere(1, rad, TRUE, center = M[,,2][,camb2[count]])
+  
+  X2[1,camb2[count],t] <- sph2[,1]
+  X2[2,camb2[count],t] <- sph2[,2]
+  X2[3,camb2[count],t] <- sph2[,3]
+  
+}
+
+data<-array(0,dim = c(p,r,numT))
+for (i in 1:num1) {
+  data[,,i]<- X1[,,i]
+  
+}
+for (i in (num1+1):(numT)) {
+  data[,,i]<- X2[,,(i-num1)]
+}
+
+### Fitting 
+
+# G=1
+
+init.sec<-matrix(0,100,1)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:numT),1)
+  
+}
+
+MVNorm.init  <- Rand.init(X=data, k=1, density = "norm", init.sec = init.sec, nstartG = 10, nThreads = 10)
+resMN[[1]]   <- Mix_Nor_MV(X=data, k=1, init.par = MVNorm.init, nstartG = 10, nThreads = 10)
+
+MVSEN.init   <- Rand.init(X=data, k=1, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resSEN[[1]]  <- Mix_Sen_MV(X=data, k=1, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init   <- Rand.init(X=data, k=1, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resTIN[[1]]  <- Mix_Tin_MV(X=data, k=1, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=data,k=1,density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resT[[1]]    <- Mix_T_MV(X=data,k=1,init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+# G=2
+
+init.sec<-matrix(0,100,2)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:numT),2)
+  
+}
+
+MVNorm.init  <- Rand.init(X=data, k=2, density = "norm", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resMN[[2]]   <- Mix_Nor_MV(X=data, k=2, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init   <- Rand.init(X=data, k=2, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resSEN[[2]]  <- Mix_Sen_MV(X=data, k=2, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init   <- Rand.init(X=data, k=2, density = "tin", init.sec = init.sec)
+resTIN[[2]]  <- Mix_Tin_MV(X=data, k=2, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=data,k=2,density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resT[[2]]    <- Mix_T_MV(X=data,k=2,init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+# G=3
+
+init.sec<-matrix(0,100,3)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:numT),3)
+  
+}
+
+MVNorm.init   <- Rand.init(X=data, k=3, density = "norm", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resMN[[3]]    <- Mix_Nor_MV(X=data, k=3, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init    <- Rand.init(X=data, k=3, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resSEN[[3]]   <- Mix_Sen_MV(X=data, k=3, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init    <- Rand.init(X=data, k=3, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resTIN[[3]]   <- Mix_Tin_MV(X=data, k=3, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init      <- Rand.init(X=data,k=3,density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+resT[[3]]     <- Mix_T_MV(X=data,k=3,init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+trueclass <- c(rep(1,num1),rep(2,num2))
+
+winNorm <- which.min(c(resMN[[1]]$BIC, resMN[[2]]$BIC, resMN[[3]]$BIC))
+winSEN  <- which.min(c(resSEN[[1]]$BIC, resSEN[[2]]$BIC, resSEN[[3]]$BIC))
+winTIN  <- which.min(c(resTIN[[1]]$BIC, resTIN[[2]]$BIC, resTIN[[3]]$BIC))
+winT    <- which.min(c(resT[[1]]$BIC, resT[[2]]$BIC, resT[[3]]$BIC))
+
+adjustedRandIndex(trueclass,resMN[[winNorm]][["classification"]])
+adjustedRandIndex(trueclass,resSEN[[winSEN]][["classification"]])
+adjustedRandIndex(trueclass,resTIN[[winTIN]][["classification"]])
+adjustedRandIndex(trueclass,resT[[winT]][["classification"]])
+
+classError(trueclass,resMN[[winNorm]][["classification"]])$errorRate
+classError(trueclass,resSEN[[winSEN]][["classification"]])$errorRate
+classError(trueclass,resTIN[[winTIN]][["classification"]])$errorRate
+classError(trueclass,resT[[winT]][["classification"]])$errorRate
+
+resMN[[winNorm]][["BIC"]]
+resSEN[[winSEN]][["BIC"]]
+resTIN[[winTIN]][["BIC"]]
+resT[[winT]][["BIC"]]
+
+### Real data application 2 ####
+
+library(pder)
+library(dplyr)
+
+data("RDPerfComp")
+
+X<-array(0,dim = c(3,8,509))
+
+for (i in c(1982:1989)) {
+  
+  tempdata<-filter(RDPerfComp,year==i)
+  
+  for (j in 1:509) {
+    
+    X[1,c(i-1981),j] <- tempdata$y[j]
+    X[2,c(i-1981),j] <- tempdata$n[j]
+    X[3,c(i-1981),j] <- tempdata$k[j]
+    
+  }
+  
+}
+
+Res_MVNorm <- vector(mode = "list",length = 5)
+Res_MVSEN  <- vector(mode = "list",length = 5)
+Res_MVTIN  <- vector(mode = "list",length = 5)
+Res_MVT    <- vector(mode = "list",length = 5)
+
+set.seed(123)
+
+### Models with G=1 ###
+
+init.sec<-matrix(0,100,1)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:509),1)
+  
+}
+
+MVNorm.init     <- Rand.init(X=X, k=1, density = "norm", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVNorm[[1]] <- Mix_Nor_MV(X=X, k=1, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init     <- Rand.init(X=X, k=1, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVSEN[[1]] <- Mix_Sen_MV(X=X, k=1, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init     <- Rand.init(X=X, k=1, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVTIN[[1]] <- Mix_Tin_MV(X=X, k=1, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=X,k=1,density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVT[[1]] <- Mix_T_MV(X=X,k=1,init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+### Models with G=2 ###
+
+init.sec<-matrix(0,100,2)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:509),2)
+  
+}
+
+MVNorm.init     <- Rand.init(X=X, k=2, density = "norm", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVNorm[[2]] <- Mix_Nor_MV(X=X, k=2, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init     <- Rand.init(X=X, k=2, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVSEN[[2]] <- Mix_Sen_MV(X=X, k=2, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init     <- Rand.init(X=X, k=2, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVTIN[[2]] <- Mix_Tin_MV(X=X, k=2, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=X, k=2, density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVT[[2]] <- Mix_T_MV(X=X, k=2, init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+### Models with G=3 ###
+
+init.sec<-matrix(0,100,3)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:509),3)
+  
+}
+
+MVNorm.init     <- Rand.init(X=X, k=3, density = "norm" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVNorm[[3]] <- Mix_Nor_MV(X=X, k=3, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init     <- Rand.init(X=X, k=3, density = "sen" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVSEN[[3]] <- Mix_Sen_MV(X=X, k=3, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init     <- Rand.init(X=X, k=3, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVTIN[[3]] <- Mix_Tin_MV(X=X, k=3, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=X, k=3, density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVT[[3]] <- Mix_T_MV(X=X,k=3, init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+### Models with G=4 ###
+
+init.sec<-matrix(0,100,4)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:509),4)
+  
+}
+
+MVNorm.init     <- Rand.init(X=X, k=4, density = "norm", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVNorm[[4]] <- Mix_Nor_MV(X=X, k=4, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init     <- Rand.init(X=X, k=4, density = "sen", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVSEN[[4]] <- Mix_Sen_MV(X=X, k=4, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init     <- Rand.init(X=X, k=4, density = "tin", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVTIN[[4]] <- Mix_Tin_MV(X=X, k=4, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=X, k=4, density = "t", init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVT[[4]] <- Mix_T_MV(X=X, k=4, init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+### Models with G=5 ###
+
+init.sec<-matrix(0,100,5)
+
+for (i in 1:100) {
+  
+  init.sec[i,]<- sample(c(1:509),5)
+  
+}
+
+MVNorm.init     <- Rand.init(X=X, k=5, density = "norm" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVNorm[[5]] <- Mix_Nor_MV(X=X, k=5, init.par = MVNorm.init ,nstartG = 10, nThreads = 10)
+
+MVSEN.init     <- Rand.init(X=X, k=5, density = "sen" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVSEN[[5]] <- Mix_Sen_MV(X=X, k=5, init.par = MVSEN.init ,nstartG = 10, nThreads = 10)
+
+MVTIN.init     <- Rand.init(X=X, k=5, density = "tin" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVTIN[[5]] <- Mix_Tin_MV(X=X, k=5, init.par = MVTIN.init ,nstartG = 10, nThreads = 10)
+
+MVT.init     <- Rand.init(X=X, k=5, density = "t" , init.sec = init.sec ,nstartG = 10, nThreads = 10)
+Res_MVT[[5]] <- Mix_T_MV(X=X, k=5, init.par = MVT.init ,nstartG = 10, nThreads = 10)
+
+winNorm <- which.min(c(Res_MVNorm[[1]]$BIC, Res_MVNorm[[2]]$BIC, Res_MVNorm[[3]]$BIC, Res_MVNorm[[4]]$BIC, Res_MVNorm[[5]]$BIC))
+winSEN  <- which.min(c(Res_MVSEN[[1]]$BIC, Res_MVSEN[[2]]$BIC, Res_MVSEN[[3]]$BIC, Res_MVSEN[[4]]$BIC, Res_MVSEN[[5]]$BIC))
+winTIN  <- which.min(c(Res_MVTIN[[1]]$BIC, Res_MVTIN[[2]]$BIC, Res_MVTIN[[3]]$BIC, Res_MVTIN[[4]]$BIC, Res_MVTIN[[5]]$BIC))
+winT    <- which.min(c(Res_MVT[[1]]$BIC, Res_MVT[[2]]$BIC, Res_MVT[[3]]$BIC, Res_MVT[[4]]$BIC, Res_MVT[[5]]$BIC))
+
+# vectorized data
+
+vectX<-matrix(0,509,24)
+for (i in 1:509) {
+  vectX[i,] <- as.vector(X[,,i])
+}
+
+### Normal kurt
+
+# G=5
+
+w.kurt(X=vectX,w=as.numeric(Res_MVNorm[[5]][["z"]][,4]))
+w.kurt(X=vectX,w=as.numeric(Res_MVNorm[[5]][["z"]][,2]))
+w.kurt(X=vectX,w=as.numeric(Res_MVNorm[[5]][["z"]][,1]))
+w.kurt(X=vectX,w=as.numeric(Res_MVNorm[[5]][["z"]][,3]))
+w.kurt(X=vectX,w=as.numeric(Res_MVNorm[[5]][["z"]][,5]))
+
+kurt(p=3,r=8,density = "norm")
+
+### Sen mixt kurt
+
+# G=3
+
+w.kurt(X=vectX,w=as.numeric(Res_MVSEN[[3]][["z"]][,2]))
+kurt(p=3,r=8,theta = Res_MVSEN[[3]][["theta"]][2], density = "sen")
+
+w.kurt(X=vectX,w=as.numeric(Res_MVSEN[[3]][["z"]][,1]))
+kurt(p=3,r=8,theta = Res_MVSEN[[3]][["theta"]][1], density = "sen")
+
+w.kurt(X=vectX,w=as.numeric(Res_MVSEN[[3]][["z"]][,3]))
+kurt(p=3,r=8,theta = Res_MVSEN[[3]][["theta"]][3], density = "sen")
+
+### Tin mixt kurt
+
+# G=3
+
+w.kurt(X=vectX,w=as.numeric(Res_MVTIN[[3]][["z"]][,2]))
+kurt(p=3,r=8,theta = Res_MVTIN[[3]][["theta"]][2], density = "tin")
+
+w.kurt(X=vectX,w=as.numeric(Res_MVTIN[[3]][["z"]][,1]))
+kurt(p=3,r=8,theta = Res_MVTIN[[3]][["theta"]][1], density = "tin")
+
+w.kurt(X=vectX,w=as.numeric(Res_MVTIN[[3]][["z"]][,3]))
+kurt(p=3,r=8,theta = Res_MVTIN[[3]][["theta"]][3], density = "tin")
+
+### T mixt kurt
+
+# G=3
+
+w.kurt(X=vectX,w=as.numeric(Res_MVT[[3]][["z"]][,3]))
+
+w.kurt(X=vectX,w=as.numeric(Res_MVT[[3]][["z"]][,1]))
+
+w.kurt(X=vectX,w=as.numeric(Res_MVT[[3]][["z"]][,2]))
 
