@@ -1,1 +1,735 @@
+library(tcltk)
+library(CVTuningCov)
+
+# Load the functions of the Function.R file
+
+#### Example of Simulation 1 ####
+
+## Case N=200 of Scenario A.
+## For the other scenarios, simply change N and the parameters as written in Section 6.4.1.
+
+B <- 100
+NumT <- 200
+p <- 3
+r <- 3
+q <- 3
+
+beta1 <- matrix(c(0, 1, 1, 1, -2, 1, 1.5, 1, 1, 1.5, 1.5, 1), nrow = p, ncol = q + 1, byrow = TRUE)
+beta2 <- matrix(c(6, -1, -1.5, -1, 4, -1, -1.5, -1, 8, -1.5, -1.5, -1), nrow = p, ncol = q + 1, byrow = TRUE)
+beta3 <- matrix(c(-5, 1, 1, 1, -3, 1.5, 1, 1, -6, 1.5, 1.5, 1), nrow = p, ncol = q + 1, byrow = TRUE)
+beta4 <- matrix(c(1, -1, -1, -1, -5, -1, -1.5, -1.5, 0, -1.5, -1, -1.5), nrow = p, ncol = q + 1, byrow = TRUE)
+
+M1 <- matrix(c(1, 2, 0, -4, -3, -3, 1, 2, 1), nrow = q, ncol = r, byrow = TRUE)
+M2 <- matrix(c(1, 3, 1, -3, -4, -2, 0, 1, 1), nrow = q, ncol = r, byrow = TRUE) + 5
+M3 <- matrix(c(1, 2, 1, -4, -4, -2, 1, 2, 0), nrow = q, ncol = r, byrow = TRUE) - 5
+M4 <- matrix(c(2, 2, 1, -4, -3, -3, 0, 1, 1), nrow = q, ncol = r, byrow = TRUE) + 10
+
+U1X <- AR1(q)
+U2X <- 2 * AR1(q, rho = 0.2)
+U3X <- round(1.5 * AR1(q, rho = 0.5), digits = 2)
+U4X <- round(1.2 * AR1(q, rho = 0.5), digits = 2)
+
+V1X <- round(1.2 * AR1(r), digits = 2)
+V2X <- round(1.4 * AR1(r), digits = 2)
+V3X <- round(0.8 * AR1(r), digits = 2)
+V4X <- round(1.6 * AR1(r), digits = 2)
+
+U1Y <- round(1.4 * AR1(p, rho = 0.6), digits = 2)
+U2Y <- round(1.8 * AR1(p, rho = 0.7), digits = 2)
+U3Y <- round(1.2 * AR1(p, rho = 0.7), digits = 2)
+U4Y <- round(1.6 * AR1(p, rho = 0.6), digits = 2)
+
+V1Y <- round(2 * AR1(r, rho = 0.3), digits = 2)
+V2Y <- round(1.1 * AR1(r), digits = 2)
+V3Y <- round(1.9 * AR1(r, rho = 0.9), digits = 2)
+V4Y <- round(1.4 * AR1(r, rho = 0.9), digits = 2)
+
+mu <- matrix(0, p, r) # media del termine d'errore
+
+Res_Random <- NULL
+for (i in 1:B) {
+  Res_Random[i] <- list(vector("list", 15))
+}
+
+InfoBic_Random <- numeric(B)
+InfoARI_Random <- numeric(B)
+InfoMiss_Random <- numeric(B)
+
+win_init_rand <- numeric(100)
+
+### START SIMULATION ###
+
+pb <- tkProgressBar(title = "Progress bar", min = 0, max = 100, width = 300)
+
+for (j in 1:100) {
+  setTkProgressBar(pb, j, label = paste(round(j / 100 * 100, 0), "% done"))
+
+  pesi <- c(0.3, 0.3, 0.2, 0.2)
+
+  temp <- sample(1:4, size = NumT, replace = TRUE, prob = pesi)
+
+  num1 <- length(temp[temp == 1])
+  num2 <- length(temp[temp == 2])
+  num3 <- length(temp[temp == 3])
+  num4 <- length(temp[temp == 4])
+
+  realC <- c(rep(1, num1), rep(2, num2), rep(3, num3), rep(4, num4))
+
+  X1 <- array(0, dim = c(q, r, num1))
+  for (i in 1:num1) {
+    X1[, , i] <- rmatrixnorm(M = M1, U = U1X, V = V1X)
+  }
+
+  X2 <- array(0, dim = c(q, r, num2))
+  for (i in 1:num2) {
+    X2[, , i] <- rmatrixnorm(M = M2, U = U2X, V = V2X)
+  }
+
+  X3 <- array(0, dim = c(q, r, num3))
+  for (i in 1:num3) {
+    X3[, , i] <- rmatrixnorm(M = M3, U = U3X, V = V3X)
+  }
+
+  X4 <- array(0, dim = c(q, r, num4))
+  for (i in 1:num4) {
+    X4[, , i] <- rmatrixnorm(M = M4, U = U4X, V = V4X)
+  }
+
+  Error1 <- array(0, dim = c(p, r, num1))
+  for (i in 1:num1) {
+    Error1[, , i] <- rmatrixnorm(M = mu, U = U1Y, V = V1Y)
+  }
+
+  X1Tot <- array(0, dim = c((q + 1), r, num1))
+  for (i in 1:num1) {
+    X1Tot[1, , i] <- rep(1, r)
+    X1Tot[2, , i] <- X1[1, , i]
+    X1Tot[3, , i] <- X1[2, , i]
+    X1Tot[4, , i] <- X1[3, , i]
+  }
+
+  Y1 <- array(0, dim = c(p, r, num1)) # Y del primo gruppo
+  for (i in 1:num1) {
+    Y1[, , i] <- beta1 %*% X1Tot[, , i] + Error1[, , i]
+  }
+
+
+  Error2 <- array(0, dim = c(p, r, num2))
+  for (i in 1:num2) {
+    Error2[, , i] <- rmatrixnorm(M = mu, U = U2Y, V = V2Y)
+  }
+
+  X2Tot <- array(0, dim = c((q + 1), r, num2))
+  for (i in 1:num2) {
+    X2Tot[1, , i] <- rep(1, r)
+    X2Tot[2, , i] <- X2[1, , i]
+    X2Tot[3, , i] <- X2[2, , i]
+    X2Tot[4, , i] <- X2[3, , i]
+  }
+
+  Y2 <- array(0, dim = c(p, r, num2)) # Y del 2 gruppo
+  for (i in 1:num2) {
+    Y2[, , i] <- beta2 %*% X2Tot[, , i] + Error2[, , i]
+  }
+
+
+  Error3 <- array(0, dim = c(p, r, num3))
+  for (i in 1:num3) {
+    Error3[, , i] <- rmatrixnorm(M = mu, U = U3Y, V = V3Y)
+  }
+
+  X3Tot <- array(0, dim = c((q + 1), r, num3))
+  for (i in 1:num3) {
+    X3Tot[1, , i] <- rep(1, r)
+    X3Tot[2, , i] <- X3[1, , i]
+    X3Tot[3, , i] <- X3[2, , i]
+    X3Tot[4, , i] <- X3[3, , i]
+  }
+
+  Y3 <- array(0, dim = c(p, r, num3)) # Y del 3 gruppo
+  for (i in 1:num3) {
+    Y3[, , i] <- beta3 %*% X3Tot[, , i] + Error3[, , i]
+  }
+
+
+  Error4 <- array(0, dim = c(p, r, num4))
+  for (i in 1:num4) {
+    Error4[, , i] <- rmatrixnorm(M = mu, U = U4Y, V = V4Y)
+  }
+
+  X4Tot <- array(0, dim = c((q + 1), r, num4))
+  for (i in 1:num4) {
+    X4Tot[1, , i] <- rep(1, r)
+    X4Tot[2, , i] <- X4[1, , i]
+    X4Tot[3, , i] <- X4[2, , i]
+    X4Tot[4, , i] <- X4[3, , i]
+  }
+
+  Y4 <- array(0, dim = c(p, r, num4)) # Y del 3 gruppo
+  for (i in 1:num4) {
+    Y4[, , i] <- beta4 %*% X4Tot[, , i] + Error4[, , i]
+  }
+
+
+  dataX <- array(0, dim = c(q, r, (NumT))) # unisco le x
+  for (i in 1:num1) {
+    dataX[, , i] <- X1[, , i]
+  }
+  for (i in (num1 + 1):(num1 + num2)) {
+    dataX[, , i] <- X2[, , (i - num1)]
+  }
+  for (i in (num1 + num2 + 1):(num1 + num2 + num3)) {
+    dataX[, , i] <- X3[, , (i - (num1 + num2))]
+  }
+  for (i in (num1 + num2 + num3 + 1):(NumT)) {
+    dataX[, , i] <- X4[, , (i - (num1 + num2 + num3))]
+  }
+
+  dataY <- array(0, dim = c(p, r, (NumT))) # unisco le y
+  for (i in 1:num1) {
+    dataY[, , i] <- Y1[, , i]
+  }
+  for (i in (num1 + 1):(num1 + num2)) {
+    dataY[, , i] <- Y2[, , (i - num1)]
+  }
+  for (i in (num1 + num2 + 1):(num1 + num2 + num3)) {
+    dataY[, , i] <- Y3[, , (i - (num1 + num2))]
+  }
+  for (i in (num1 + num2 + num3 + 1):(NumT)) {
+    dataY[, , i] <- Y4[, , (i - (num1 + num2 + num3))]
+  }
+
+  ## CR Matrix Variate
+
+  tryCatch(Res_Random[[j]][[1]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, nstart = 10, nThreads = 10), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[2]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, nstart = 10, nThreads = 10), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[3]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, nstart = 10, nThreads = 10), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[4]] <- MV_CWM3(Y = dataY, X = dataX, k = 4, nstart = 10, nThreads = 10), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[5]] <- MV_CWM3(Y = dataY, X = dataX, k = 5, nstart = 10, nThreads = 10), error = function(e) {
+    NULL
+  })
+
+  tryCatch(Res_Random[[j]][[6]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, init = "kmeans"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[7]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, init = "kmeans"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[8]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, init = "kmeans"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[9]] <- MV_CWM3(Y = dataY, X = dataX, k = 4, init = "kmeans"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[10]] <- MV_CWM3(Y = dataY, X = dataX, k = 5, init = "kmeans"), error = function(e) {
+    NULL
+  })
+
+  tryCatch(Res_Random[[j]][[11]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, init = "mixture"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[12]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, init = "mixture"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[13]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, init = "mixture"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[14]] <- MV_CWM3(Y = dataY, X = dataX, k = 4, init = "mixture"), error = function(e) {
+    NULL
+  })
+  tryCatch(Res_Random[[j]][[15]] <- MV_CWM3(Y = dataY, X = dataX, k = 5, init = "mixture"), error = function(e) {
+    NULL
+  })
+
+  Bic.parziale <- rep(NA, 15)
+
+  for (l in 1:15) {
+    if (all(!is.null(Res_Random[[j]][[l]]))) {
+      if (all(Res_Random[[j]][[l]][["prior"]] > 0.055)) {
+        Bic.parziale[l] <- Res_Random[[j]][[l]][["BIC"]]
+      }
+    }
+  }
+
+  InfoBic_Random[j] <- which.min(Bic.parziale)
+  InfoARI_Random[j] <- round(adjustedRandIndex(x = realC, y = Res_Random[[j]][[which.min(Bic.parziale)]][["classification"]]), digits = 3)
+  InfoMiss_Random[j] <- classError(realC, Res_Random[[j]][[which.min(Bic.parziale)]][["classification"]])$errorRate
+
+  if (InfoBic_Random[j] %in% c(1, 2, 3, 4, 5)) {
+    win_init_rand[j] <- 1
+  }
+  if (InfoBic_Random[j] %in% c(6, 7, 8, 9, 10)) {
+    win_init_rand[j] <- 2
+  }
+  if (InfoBic_Random[j] %in% c(11, 12, 13, 14, 15)) {
+    win_init_rand[j] <- 3
+  }
+}
+
+close(pb)
+
+
+#### Example of Simulation 2 ####
+
+# Example of Scenario C. For the other scenarios adjust the paramters as written in Section 6.4.2.
+
+B <- 30
+NumT <- 200
+p <- 2
+r <- 4
+q <- 3
+
+beta1 <- matrix(c(-3, 1, 1, -1, -4, 1, -1, 1), nrow = p, ncol = q + 1, byrow = TRUE)
+beta2 <- matrix(c(-7, 1, 1, -1, -8, 1, -1, 1), nrow = p, ncol = q + 1, byrow = TRUE)
+
+M1 <- matrix(c(1, 2, 2, 0, -1, -1, 1, 2, 0, 2, 2, 1), nrow = q, ncol = r, byrow = TRUE)
+M2 <- matrix(c(1, 2, 2, 0, -1, -1, 1, 2, 0, 2, 2, 1), nrow = q, ncol = r, byrow = TRUE) + 5
+
+U1X <- AR1(q)
+U2X <- 2 * AR1(q, rho = 0.2)
+V1X <- round(1.7 * AR1(r), digits = 2)
+V2X <- round(AR1(r), digits = 2)
+
+U1Y <- AR1(p)
+U2Y <- 2 * AR1(p, rho = 0.6)
+V1Y <- round(2 * AR1(r), digits = 2)
+V2Y <- round(1.5 * AR1(r), digits = 2)
+
+mu <- matrix(0, p, r) # media del termine d'errore
+
+Res_Random <- NULL
+for (i in 1:B) {
+  Res_Random[i] <- list(vector("list", 9))
+}
+Res_Fisso <- NULL
+for (i in 1:B) {
+  Res_Fisso[i] <- list(vector("list", 9))
+}
+
+InfoBic_Random <- numeric(B)
+InfoBic_Fisso <- numeric(B)
+InfoARI_Random <- numeric(B)
+InfoARI_Fisso <- numeric(B)
+InfoMiss_Random <- numeric(B)
+InfoMiss_Fisso <- numeric(B)
+
+win_init_rand <- numeric(30)
+win_init_fisso <- numeric(30) # 1 Random # 2 kmeans # 3 mixture
+
+realC <- matrix(0, B, NumT)
+
+### START SIMULATION ###
+
+pb <- tkProgressBar(title = "Progress bar", min = 0, max = 30, width = 300)
+
+for (j in 1:30) {
+  setTkProgressBar(pb, j, label = paste(round(j / 30 * 100, 0), "% done"))
+
+  temp <- rbinom(NumT, size = 1, prob = 0.5)
+
+  num1 <- length(temp[temp == 1])
+  num2 <- length(temp[temp == 0])
+
+  realC[j, ] <- c(rep(1, num1), rep(2, num2))
+
+  X1 <- array(0, dim = c(q, r, num1))
+  for (i in 1:num1) {
+    X1[, , i] <- rmatrixnorm(M = M1, U = U1X, V = V1X)
+  }
+
+  X2 <- array(0, dim = c(q, r, num2))
+  for (i in 1:num2) {
+    X2[, , i] <- rmatrixnorm(M = M2, U = U2X, V = V2X)
+  }
+
+  Error1 <- array(0, dim = c(p, r, num1))
+  for (i in 1:num1) {
+    Error1[, , i] <- rmatrixnorm(M = mu, U = U1Y, V = V1Y)
+  }
+
+  X1Tot <- array(0, dim = c((q + 1), r, num1))
+  for (i in 1:num1) {
+    X1Tot[1, , i] <- rep(1, r)
+    X1Tot[2, , i] <- X1[1, , i]
+    X1Tot[3, , i] <- X1[2, , i]
+    X1Tot[4, , i] <- X1[3, , i]
+  }
+
+  Y1 <- array(0, dim = c(p, r, num1)) # Y del primo gruppo
+  for (i in 1:num1) {
+    Y1[, , i] <- beta1 %*% X1Tot[, , i] + Error1[, , i]
+  }
+
+  Error2 <- array(0, dim = c(p, r, num2))
+  for (i in 1:num2) {
+    Error2[, , i] <- rmatrixnorm(M = mu, U = U2Y, V = V2Y)
+  }
+
+  X2Tot <- array(0, dim = c((q + 1), r, num2))
+  for (i in 1:num2) {
+    X2Tot[1, , i] <- rep(1, r)
+    X2Tot[2, , i] <- X2[1, , i]
+    X2Tot[3, , i] <- X2[2, , i]
+    X2Tot[4, , i] <- X2[3, , i]
+  }
+
+  Y2 <- array(0, dim = c(p, r, num2)) # Y del 2 gruppo
+  for (i in 1:num2) {
+    Y2[, , i] <- beta2 %*% X2Tot[, , i] + Error2[, , i]
+  }
+
+  dataX <- array(0, dim = c(q, r, (NumT))) # unisco le x
+  for (i in 1:num1) {
+    dataX[, , i] <- X1[, , i]
+  }
+  for (i in (num1 + 1):(NumT)) {
+    dataX[, , i] <- X2[, , (i - num1)]
+  }
+
+  dataY <- array(0, dim = c(p, r, (NumT))) # unisco le y
+  for (i in 1:num1) {
+    dataY[, , i] <- Y1[, , i]
+  }
+  for (i in (num1 + 1):(NumT)) {
+    dataY[, , i] <- Y2[, , (i - num1)]
+  }
+
+  ## CR Matrix Variate
+
+  tryCatch(Res_Random[[j]][[1]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[2]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[3]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+
+  tryCatch(Res_Random[[j]][[4]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, init = "kmeans"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[5]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, init = "kmeans"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[6]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, init = "kmeans"), error = function(e) {
+    NA
+  })
+
+  tryCatch(Res_Random[[j]][[7]] <- MV_CWM3(Y = dataY, X = dataX, k = 1, init = "mixture"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[8]] <- MV_CWM3(Y = dataY, X = dataX, k = 2, init = "mixture"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Random[[j]][[9]] <- MV_CWM3(Y = dataY, X = dataX, k = 3, init = "mixture"), error = function(e) {
+    NA
+  })
+
+  Bic.parziale <- rep(NA, 9)
+
+  for (l in 1:9) {
+    if (all(!is.null(Res_Random[[j]][[l]]))) {
+      if (all(Res_Random[[j]][[l]][["prior"]] > 0.055)) {
+        Bic.parziale[l] <- Res_Random[[j]][[l]][["BIC"]]
+      }
+    }
+  }
+
+  InfoBic_Random[j] <- which.min(Bic.parziale)
+  InfoARI_Random[j] <- round(adjustedRandIndex(x = realC[j, ], y = Res_Random[[j]][[which.min(Bic.parziale)]][["classification"]]), digits = 3)
+  InfoMiss_Random[j] <- classError(realC[j, ], Res_Random[[j]][[which.min(Bic.parziale)]][["classification"]])$errorRate
+
+  if (InfoBic_Random[j] %in% c(1, 2, 3)) {
+    win_init_rand[j] <- 1
+  }
+  if (InfoBic_Random[j] %in% c(4, 5, 6)) {
+    win_init_rand[j] <- 2
+  }
+  if (InfoBic_Random[j] %in% c(7, 8, 9)) {
+    win_init_rand[j] <- 3
+  }
+
+  ## CF Matrix Variate
+
+  tryCatch(Res_Fisso[[j]][[1]] <- MV_CF3(Y = dataY, X = dataX, k = 1, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[2]] <- MV_CF3(Y = dataY, X = dataX, k = 2, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[3]] <- MV_CF3(Y = dataY, X = dataX, k = 3, nstart = 10, nThreads = 10), error = function(e) {
+    NA
+  })
+
+  tryCatch(Res_Fisso[[j]][[4]] <- MV_CF3(Y = dataY, X = dataX, k = 1, init = "kmeans"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[5]] <- MV_CF3(Y = dataY, X = dataX, k = 2, init = "kmeans"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[6]] <- MV_CF3(Y = dataY, X = dataX, k = 3, init = "kmeans"), error = function(e) {
+    NA
+  })
+
+  tryCatch(Res_Fisso[[j]][[7]] <- MV_CF3(Y = dataY, X = dataX, k = 1, init = "mixture"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[8]] <- MV_CF3(Y = dataY, X = dataX, k = 2, init = "mixture"), error = function(e) {
+    NA
+  })
+  tryCatch(Res_Fisso[[j]][[9]] <- MV_CF3(Y = dataY, X = dataX, k = 3, init = "mixture"), error = function(e) {
+    NA
+  })
+
+  Bic.parziale <- rep(NA, 9)
+
+  for (l in 1:9) {
+    if (all(!is.null(Res_Fisso[[j]][[l]]))) {
+      if (all(Res_Fisso[[j]][[l]][["prior"]] > 0.055)) {
+        Bic.parziale[l] <- Res_Fisso[[j]][[l]][["BIC"]]
+      }
+    }
+  }
+
+  InfoBic_Fisso[j] <- which.min(Bic.parziale)
+  InfoARI_Fisso[j] <- round(adjustedRandIndex(x = realC[j, ], y = Res_Fisso[[j]][[which.min(Bic.parziale)]][["classification"]]), digits = 3)
+  InfoMiss_Fisso[j] <- classError(realC[j, ], Res_Fisso[[j]][[which.min(Bic.parziale)]][["classification"]])$errorRate
+
+  if (InfoBic_Fisso[j] %in% c(1, 2, 3)) {
+    win_init_fisso[j] <- 1
+  }
+  if (InfoBic_Fisso[j] %in% c(4, 5, 6)) {
+    win_init_fisso[j] <- 2
+  }
+  if (InfoBic_Fisso[j] %in% c(7, 8, 9)) {
+    win_init_fisso[j] <- 3
+  }
+}
+
+close(pb)
+
+#### Insurance data example ####
+
+library(sf)
+library(splm)
+library(dplyr)
+
+res_CR <- vector("list", 1)
+for (j in 1:1) {
+  res_CR[[j]] <- vector("list", 5)
+
+  for (i in 1:5) {
+    res_CR[[j]][[i]] <- vector("list", 3)
+  }
+}
+res_CF <- vector("list", 1)
+for (j in 1:1) {
+  res_CF[[j]] <- vector("list", 5)
+
+  for (i in 1:5) {
+    res_CF[[j]][[i]] <- vector("list", 3)
+  }
+}
+InfoBic_CR <- numeric(5)
+InfoBic_CF <- numeric(5)
+
+data(Insurance)
+datiX <- select(Insurance, rgdp, bank, rirs)
+datiY <- select(Insurance, ppcd, agen)
+
+# Preparing the data
+
+cont <- seq(1, 515, 5)
+dataX <- matrix(0, 515, 3)
+dataY <- matrix(0, 515, 2)
+colnames(dataX) <- colnames(datiX)
+colnames(dataY) <- colnames(datiY)
+
+for (i in cont) {
+  dataX[i, ] <- as.numeric(datiX[i, ])
+  dataY[i, ] <- as.numeric(datiY[i, ])
+}
+
+row_sub <- apply(dataX, 1, function(row) all(row != 0))
+dataX <- dataX[row_sub, ]
+row_sub <- apply(dataY, 1, function(row) all(row != 0))
+dataY <- dataY[row_sub, ]
+
+cont2 <- seq(2, 515, 5)
+dataX2 <- matrix(0, 515, 3)
+dataY2 <- matrix(0, 515, 2)
+colnames(dataX2) <- colnames(datiX)
+colnames(dataY2) <- colnames(datiY)
+
+for (i in cont2) {
+  dataX2[i, ] <- as.numeric(datiX[i, ])
+  dataY2[i, ] <- as.numeric(datiY[i, ])
+}
+
+row_sub <- apply(dataX2, 1, function(row) all(row != 0))
+dataX2 <- dataX2[row_sub, ]
+row_sub <- apply(dataY2, 1, function(row) all(row != 0))
+dataY2 <- dataY2[row_sub, ]
+
+cont3 <- seq(3, 515, 5)
+dataX3 <- matrix(0, 515, 3)
+dataY3 <- matrix(0, 515, 2)
+colnames(dataX3) <- colnames(datiX)
+colnames(dataY3) <- colnames(datiY)
+
+for (i in cont3) {
+  dataX3[i, ] <- as.numeric(datiX[i, ])
+  dataY3[i, ] <- as.numeric(datiY[i, ])
+}
+
+row_sub <- apply(dataX3, 1, function(row) all(row != 0))
+dataX3 <- dataX3[row_sub, ]
+row_sub <- apply(dataY3, 1, function(row) all(row != 0))
+dataY3 <- dataY3[row_sub, ]
+
+cont4 <- seq(4, 515, 5)
+dataX4 <- matrix(0, 515, 3)
+dataY4 <- matrix(0, 515, 2)
+colnames(dataX4) <- colnames(datiX)
+colnames(dataY4) <- colnames(datiY)
+
+for (i in cont4) {
+  dataX4[i, ] <- as.numeric(datiX[i, ])
+  dataY4[i, ] <- as.numeric(datiY[i, ])
+}
+
+row_sub <- apply(dataX4, 1, function(row) all(row != 0))
+dataX4 <- dataX4[row_sub, ]
+row_sub <- apply(dataY4, 1, function(row) all(row != 0))
+dataY4 <- dataY4[row_sub, ]
+
+cont5 <- seq(5, 515, 5)
+dataX5 <- matrix(0, 515, 3)
+dataY5 <- matrix(0, 515, 2)
+colnames(dataX5) <- colnames(datiX)
+colnames(dataY5) <- colnames(datiY)
+
+for (i in cont5) {
+  dataX5[i, ] <- as.numeric(datiX[i, ])
+  dataY5[i, ] <- as.numeric(datiY[i, ])
+}
+
+row_sub <- apply(dataX5, 1, function(row) all(row != 0))
+dataX5 <- dataX5[row_sub, ]
+row_sub <- apply(dataY5, 1, function(row) all(row != 0))
+dataY5 <- dataY5[row_sub, ]
+
+varY <- array(0, dim = c(2, 5, 103))
+varX <- array(0, dim = c(3, 5, 103))
+
+for (i in 1:103) {
+  varY[1, 1, i] <- dataY[i, 1]
+  varY[1, 2, i] <- dataY2[i, 1]
+  varY[1, 3, i] <- dataY3[i, 1]
+  varY[1, 4, i] <- dataY4[i, 1]
+  varY[1, 5, i] <- dataY5[i, 1]
+
+  varY[2, 1, i] <- dataY[i, 2]
+  varY[2, 2, i] <- dataY2[i, 2]
+  varY[2, 3, i] <- dataY3[i, 2]
+  varY[2, 4, i] <- dataY4[i, 2]
+  varY[2, 5, i] <- dataY5[i, 2]
+}
+
+for (i in 1:103) {
+  varX[1, 1, i] <- dataX[i, 1] / 1000
+  varX[1, 2, i] <- dataX2[i, 1] / 1000
+  varX[1, 3, i] <- dataX3[i, 1] / 1000
+  varX[1, 4, i] <- dataX4[i, 1] / 1000
+  varX[1, 5, i] <- dataX5[i, 1] / 1000
+
+  varX[2, 1, i] <- dataX[i, 2] / 1000
+  varX[2, 2, i] <- dataX2[i, 2] / 1000
+  varX[2, 3, i] <- dataX3[i, 2] / 1000
+  varX[2, 4, i] <- dataX4[i, 2] / 1000
+  varX[2, 5, i] <- dataX5[i, 2] / 1000
+
+  varX[3, 1, i] <- dataX[i, 3]
+  varX[3, 2, i] <- dataX2[i, 3]
+  varX[3, 3, i] <- dataX3[i, 3]
+  varX[3, 4, i] <- dataX4[i, 3]
+  varX[3, 5, i] <- dataX5[i, 3]
+}
+
+# Fitting the models. Parallel computing using 15 cores. Change "nThreads=" argument below to modify.
+
+for (m in 1:5) {
+  attempt <- 0
+  while (is.null(res_CR[[1]][[m]][[1]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CR[[1]][[m]][[1]] <- MV_CWM3(Y = varY, X = varX, k = 1, nstart = 15, nThreads = 15))
+  }
+
+  attempt <- 0
+  while (is.null(res_CR[[1]][[m]][[2]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CR[[1]][[m]][[2]] <- MV_CWM3(Y = varY, X = varX, k = 2, nstart = 15, nThreads = 15))
+  }
+
+  attempt <- 0
+  while (is.null(res_CR[[1]][[m]][[3]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CR[[1]][[m]][[3]] <- MV_CWM3(Y = varY, X = varX, k = 3, nstart = 15, nThreads = 15))
+  }
+
+  Bic.parziale <- numeric(3)
+  if (length(res_CR[[1]][[m]][[1]]) != 1) {
+    Bic.parziale[1] <- res_CR[[1]][[m]][[1]][["BIC"]]
+  }
+  if (length(res_CR[[1]][[m]][[2]]) != 1) {
+    Bic.parziale[2] <- res_CR[[1]][[m]][[2]][["BIC"]]
+  }
+  if (length(res_CR[[1]][[m]][[3]]) != 1) {
+    Bic.parziale[3] <- res_CR[[1]][[m]][[3]][["BIC"]]
+  }
+  InfoBic_CR[m] <- which.min(Bic.parziale)
+}
+
+## CF Matrix Variate
+
+for (m in 1:5) {
+  attempt <- 0
+  while (is.null(res_CF[[1]][[m]][[1]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CF[[1]][[m]][[1]] <- MV_CF3(Y = varY, X = varX, k = 1, nstart = 15, nThreads = 15))
+  }
+
+  attempt <- 0
+  while (is.null(res_CF[[1]][[m]][[2]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CF[[1]][[m]][[2]] <- MV_CF3(Y = varY, X = varX, k = 2, nstart = 15, nThreads = 15))
+  }
+
+  attempt <- 0
+  while (is.null(res_CF[[1]][[m]][[3]]) && attempt < 100) {
+    attempt <- attempt + 1
+    try(res_CF[[1]][[m]][[3]] <- MV_CF3(Y = varY, X = varX, k = 3, nstart = 15, nThreads = 15))
+  }
+
+  Bic.parziale <- numeric(3)
+  if (length(res_CF[[1]][[m]][[1]]) != 1) {
+    Bic.parziale[1] <- res_CF[[1]][[m]][[1]][["BIC"]]
+  }
+  if (length(res_CF[[1]][[m]][[2]]) != 1) {
+    Bic.parziale[2] <- res_CF[[1]][[m]][[2]][["BIC"]]
+  }
+  if (length(res_CF[[1]][[m]][[3]]) != 1) {
+    Bic.parziale[3] <- res_CF[[1]][[m]][[3]][["BIC"]]
+  }
+  InfoBic_CF[m] <- which.min(Bic.parziale)
+}
 
